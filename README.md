@@ -2,20 +2,6 @@
 
 An endless, social-media-style feed of interesting articles that gradually adapts to what you like. Built with React and Vite. React is the only runtime dependency.
 
-## Run it
-
-```bash
-npm install
-npm run dev       # local dev server
-npm run build     # production build into dist/
-```
-
-## Deploy to GitHub Pages
-
-1. Push this folder to a GitHub repo with a `main` branch.
-2. In the repo, go to **Settings → Pages** and set **Source** to **GitHub Actions**.
-3. Every push to `main` runs `.github/workflows/deploy.yml`, which builds and publishes the site.
-
 ## How it works
 
 - **Content:** three sources, all called straight from the browser (they allow cross-origin requests), so no scraper or server is needed:
