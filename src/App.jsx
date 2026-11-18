@@ -57,7 +57,7 @@ export default function App() {
         <div hidden={view !== 'feed'}>
           <p className="tailoring">
             {tailored === 0
-              ? 'Like or save things you enjoy and your feed will start to follow your curiosity.'
+              ? 'Like or save things you enjoy and your feed will change.'
               : `About ${tailored}% of each batch is now chosen from what you've liked.`}
           </p>
           <Feed feed={feed} profile={profile} onLike={onLike} onSave={onSave} onOpen={onOpen} />
