@@ -1,6 +1,7 @@
 // Images and videos from Wikimedia Commons, via its search API (CORS-enabled
 // with `origin=*`). Exploration uses Commons' curated collections; topical
-// requests search by a topic the user has shown interest in.
+// requests search by a topic; tag requests list one Commons category; nearby
+// requests use Commons' geotagged files.
 
 const API = 'https://commons.wikimedia.org/w/api.php';
 
@@ -8,13 +9,10 @@ const FEATURED_PICTURES = 'incategory:"Featured pictures on Wikimedia Commons"';
 // "Featured media" is mostly videos (.webm/.ogv) plus some audio; filetype:video narrows it.
 const FEATURED_VIDEOS = 'incategory:"Featured media" filetype:video';
 
-const PARAMS = {
-  action: 'query',
-  format: 'json',
-  formatversion: '2',
-  origin: '*',
-  generator: 'search',
-  gsrnamespace: '6', // the File: namespace
+const COMMON = { action: 'query', format: 'json', formatversion: '2', origin: '*' };
+
+const INFO_PARAMS = {
+  ...COMMON,
   prop: 'imageinfo',
   iiprop: 'url|mime|mediatype|size|extmetadata',
   iiurlwidth: '800', // thumbnail (or video poster frame) width
@@ -52,7 +50,12 @@ export function clip(text, max) {
   return `${cut.slice(0, cut.lastIndexOf(' ')).trimEnd()}…`;
 }
 
-export function toMediaCard(page) {
+/**
+ * Turns a Commons file page into a card, or null if it doesn't suit the feed.
+ * With `titleFallback`, a file with no real description uses its title instead
+ * (nearby photos are often captioned only by their filename).
+ */
+export function toMediaCard(page, { titleFallback = false } = {}) {
   const info = page.imageinfo?.[0];
   if (!info?.thumburl) return null;
 
@@ -64,8 +67,12 @@ export function toMediaCard(page) {
   const meta = info.extmetadata ?? {};
   const value = (key) => meta[key]?.value ?? '';
 
-  const description = clip(stripHtml(value('ImageDescription')).replace(/^English\s*:\s*/i, ''), 420);
-  if (description.length < 25) return null; // a bare filename makes a dull card
+  const title = page.title.replace(/^File:/, '').replace(/\.[^.]+$/, '').replace(/_/g, ' ');
+  let description = clip(stripHtml(value('ImageDescription')).replace(/^English\s*:\s*/i, ''), 420);
+  if (description.length < 25) {
+    if (!titleFallback || title.length < 8) return null; // a bare filename makes a dull card
+    description = title;
+  }
 
   const categories = value('Categories')
     .split('|')
@@ -78,7 +85,7 @@ export function toMediaCard(page) {
     kind: 'media',
     mediaType,
     mime: info.mime,
-    title: page.title.replace(/^File:/, '').replace(/\.[^.]+$/, '').replace(/_/g, ' '),
+    title,
     extract: description,
     image: info.thumburl,
     mediaUrl: mediaType === 'video' ? info.url : null,
@@ -93,23 +100,34 @@ export function toMediaCard(page) {
   };
 }
 
+async function call(params) {
+  const res = await fetch(`${API}?${new URLSearchParams(params)}`);
+  if (!res.ok) throw new Error(`Commons API error ${res.status}`);
+  return res.json();
+}
+
+const pagesOf = (data) => data?.query?.pages ?? [];
+
 async function run(search, limit, offset) {
-  const params = new URLSearchParams({
-    ...PARAMS,
+  const data = await call({
+    ...INFO_PARAMS,
+    generator: 'search',
+    gsrnamespace: '6', // the File: namespace
     gsrsearch: search,
     gsrlimit: String(limit),
     gsroffset: String(offset),
   });
-  const res = await fetch(`${API}?${params}`);
-  if (!res.ok) throw new Error(`Commons API error ${res.status}`);
-  const data = await res.json();
-  return data?.query?.pages ?? [];
+  return { pages: pagesOf(data), next: data?.continue?.gsroffset ?? null };
 }
+
+const byIndex = (pages) => [...pages].sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
+
+const cleanTerm = (s) => String(s).replace(/"/g, '');
 
 async function fetchMedia({ video, topic, n }) {
   const filter = video ? 'filetype:video' : 'filetype:bitmap';
   const search = topic
-    ? `"${topic.replace(/"/g, '')}" ${filter}`
+    ? `"${cleanTerm(topic)}" ${filter}`
     : video
       ? FEATURED_VIDEOS
       : FEATURED_PICTURES;
@@ -118,14 +136,61 @@ async function fetchMedia({ video, topic, n }) {
   const offset = Math.floor(Math.random() * maxOffset);
 
   const limit = Math.min(Math.max(n * 4, 12), 20); // over-fetch: many files get filtered out
-  let pages = await run(search, limit, offset);
-  if (pages.length === 0 && offset > 0) pages = await run(search, limit, 0);
+  let { pages } = await run(search, limit, offset);
+  if (pages.length === 0 && offset > 0) ({ pages } = await run(search, limit, 0));
 
-  return [...pages]
-    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
-    .map(toMediaCard)
-    .filter(Boolean);
+  return byIndex(pages).map((p) => toMediaCard(p)).filter(Boolean);
 }
 
 export const fetchCommonsImages = (n, topic) => fetchMedia({ video: false, topic, n });
 export const fetchCommonsVideos = (n, topic) => fetchMedia({ video: true, topic, n });
+
+/** One page of images or videos in a Commons category (a card's tag). `next` is the following offset, or null. */
+export async function fetchCommonsCategory({ video, category, n, offset = 0 }) {
+  const filter = video ? 'filetype:video' : 'filetype:bitmap';
+  const { pages, next } = await run(`incategory:"${cleanTerm(category)}" ${filter}`, Math.min(n, 20), offset);
+  return { cards: byIndex(pages).map((p) => toMediaCard(p)).filter(Boolean), next };
+}
+
+// ---------- nearby ----------
+
+const nearbyCache = new Map(); // 'lat|lon' -> Promise<{ pageid, dist }[]>, nearest first
+
+/** Geotagged files within 10 km (the API's maximum radius), nearest first. Cached per location. */
+function nearbyIndex(coords) {
+  const key = `${coords.lat.toFixed(3)}|${coords.lon.toFixed(3)}`;
+  if (!nearbyCache.has(key)) {
+    const request = call({
+      ...COMMON,
+      list: 'geosearch',
+      gscoord: `${coords.lat}|${coords.lon}`,
+      gsradius: '10000',
+      gslimit: '100',
+      gsnamespace: '6',
+    }).then((data) => data?.query?.geosearch ?? []);
+    request.catch(() => nearbyCache.delete(key));
+    nearbyCache.set(key, request);
+  }
+  return nearbyCache.get(key);
+}
+
+/** A page of photos and videos taken near `coords`, nearest first. */
+export async function fetchCommonsNearby(coords, n, offset = 0) {
+  const index = await nearbyIndex(coords);
+  const slice = index.slice(offset, offset + Math.min(n, 20));
+  const end = offset + slice.length;
+  const next = end < index.length ? end : null;
+  if (slice.length === 0) return { cards: [], next };
+
+  const data = await call({ ...INFO_PARAMS, pageids: slice.map((e) => e.pageid).join('|') });
+  const order = new Map(slice.map((e, i) => [e.pageid, { i, dist: e.dist }]));
+  const cards = pagesOf(data)
+    .filter((p) => order.has(p.pageid))
+    .sort((a, b) => order.get(a.pageid).i - order.get(b.pageid).i)
+    .map((p) => {
+      const card = toMediaCard(p, { titleFallback: true });
+      return card && { ...card, distanceM: order.get(p.pageid).dist };
+    })
+    .filter(Boolean);
+  return { cards, next };
+}

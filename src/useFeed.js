@@ -1,72 +1,72 @@
 import { useCallback, useRef, useState } from 'react';
-import { fetchRandom, fetchRelated } from './wiki.js';
-import { fetchOnThisDay } from './onThisDay.js';
-import { fetchCommonsImages, fetchCommonsVideos } from './commons.js';
-import { BATCH, SPECIAL_SLOTS, buildBatch } from './batch.js';
-import { markSeen, personalRatio, pickSeeds } from './profile.js';
+import { buildBatch, isEmptyParts, leftovers, mergeParts } from './batch.js';
+import { fetchParts, initialCursor } from './sources.js';
+import { isSequential } from './filters.js';
+import { markSeen } from './profile.js';
 
 const MAX_ATTEMPTS = 3;
 
 /**
- * Infinite feed. Each batch pulls from four sources at once:
- *   - Wikipedia articles: random ones plus ones similar to what the user liked
- *   - "On this day" history for today's date
- *   - one Wikimedia Commons image and one Commons video
- * The personalised share grows as the user likes and saves more. A source that
- * fails or is slow never blocks the others.
+ * Infinite feed for one filter. The component using this is keyed by the
+ * filter, so changing the filter starts a fresh feed.
+ *
+ * "For you" and category feeds sample at random and never repeat. Tag and
+ * nearby feeds walk through a fixed list: they keep a cursor per source plus a
+ * buffer of fetched-but-not-yet-shown cards, and report `done` once all of it
+ * has been shown.
  */
-export function useFeed(profile, setProfile) {
+export function useFeed(profile, setProfile, filter, coords) {
   const [cards, setCards] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
 
   const profileRef = useRef(profile);
   profileRef.current = profile;
+  const coordsRef = useRef(coords);
+  coordsRef.current = coords;
+
   const inFlight = useRef(false);
+  const finished = useRef(false);
   const sessionIds = useRef(new Set());
+  const cursor = useRef(initialCursor(filter));
+  const buffer = useRef(null);
 
   const loadMore = useCallback(async () => {
-    if (inFlight.current) return;
+    if (inFlight.current || finished.current) return;
     inFlight.current = true;
     setLoading(true);
     setError(null);
 
     try {
+      const sequential = isSequential(filter);
       let page = [];
-      for (let attempt = 0; attempt < MAX_ATTEMPTS && page.length === 0; attempt++) {
+      let exhausted = false;
+
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         const p = profileRef.current;
-        const exclude = new Set([...p.seen, ...sessionIds.current]);
+        // The main feed never repeats anything the user has ever been shown.
+        // Other feeds only avoid repeats within themselves.
+        const exclude = new Set(sessionIds.current);
+        if (filter.type === 'all') p.seen.forEach((id) => exclude.add(id));
 
-        const ratio = personalRatio(p);
-        const slots = BATCH - SPECIAL_SLOTS; // slots left for Wikipedia articles
-        const seeds = ratio > 0 ? pickSeeds(p, 3) : [];
-        const nPersonal = seeds.length ? Math.round(slots * ratio) : 0;
-        const perSeed = seeds.length ? Math.ceil(nPersonal / seeds.length) + 3 : 0;
+        const { parts: fetched, errors } = await fetchParts(filter, {
+          profile: p,
+          exclude,
+          cursor: cursor.current,
+          coords: coordsRef.current,
+        });
+        const parts = sequential && buffer.current ? mergeParts(buffer.current, fetched) : fetched;
+        if (isEmptyParts(parts) && errors.length > 0) throw errors[0];
 
-        // With some probability, fetch media about a topic the user liked instead of a featured one.
-        const topicFor = (i) =>
-          seeds.length && Math.random() < ratio ? seeds[i % seeds.length] : undefined;
+        page = buildBatch(parts, p, exclude, { keepOrder: filter.type === 'nearby' });
 
-        const errors = [];
-        const safe = (promise) =>
-          promise.catch((e) => {
-            errors.push(e);
-            return [];
-          });
-
-        const [random, related, otd, images, videos] = await Promise.all([
-          // Ask for extra: some results are filtered out or are repeats.
-          safe(fetchRandom(slots - nPersonal + 4)),
-          Promise.all(seeds.map((title) => safe(fetchRelated(title, perSeed)))).then((lists) => lists.flat()),
-          safe(fetchOnThisDay(4, exclude)),
-          safe(fetchCommonsImages(1, topicFor(0))),
-          safe(fetchCommonsVideos(1, topicFor(1))),
-        ]);
-
-        const everything = [random, related, otd, images, videos].every((list) => list.length === 0);
-        if (everything && errors.length > 0) throw errors[0];
-
-        page = buildBatch({ random, related, otd, images, videos }, p, exclude);
+        if (sequential) {
+          buffer.current = leftovers(parts, page, exclude);
+          exhausted =
+            Object.values(cursor.current).every((v) => v === null) && isEmptyParts(buffer.current);
+        }
+        if (page.length > 0 || exhausted) break;
       }
 
       if (page.length > 0) {
@@ -75,13 +75,19 @@ export function useFeed(profile, setProfile) {
         setProfile((p) => markSeen(p, ids));
         setCards((prev) => [...prev, ...page]);
       }
+      if (exhausted) {
+        finished.current = true;
+        setDone(true);
+      } else if (page.length === 0) {
+        setError('Nothing new found right now.');
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong.');
     } finally {
       inFlight.current = false;
       setLoading(false);
     }
-  }, [setProfile]);
+  }, [filter, setProfile]);
 
-  return { cards, loading, error, loadMore };
+  return { cards, loading, error, done, loadMore };
 }

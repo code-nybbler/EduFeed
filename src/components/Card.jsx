@@ -1,4 +1,6 @@
-import { memo } from 'react';
+import { memo, useEffect, useRef } from 'react';
+import CollectionPicker from './CollectionPicker.jsx';
+import { formatDistance } from '../format.js';
 
 const SECTION_LABEL = {
   event: 'On this day',
@@ -6,9 +8,17 @@ const SECTION_LABEL = {
   death: 'Died on this day',
 };
 
+const VIEW_DELAY_MS = 1200; // how long a card must be on screen to count as read
+
 function yearsAgoLabel(n) {
   if (!Number.isFinite(n) || n <= 0) return '';
   return n === 1 ? '1 year ago' : `${n.toLocaleString('en-US')} years ago`;
+}
+
+function distanceLabel(meters) {
+  const miles = typeof navigator !== 'undefined' && /^en-US/i.test(navigator.language ?? '');
+  const text = formatDistance(meters, miles);
+  return text ? `📍 ${text} away` : '';
 }
 
 function canPlay(mime) {
@@ -25,6 +35,33 @@ function pauseOthers(event) {
   document.querySelectorAll('video').forEach((v) => {
     if (v !== event.currentTarget) v.pause();
   });
+}
+
+/** Calls `onView(card)` once the card has been mostly on screen for a moment. Drives the daily streak. */
+function useViewed(ref, card, onView) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !onView || typeof IntersectionObserver === 'undefined') return undefined;
+    let timer = null;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          timer = setTimeout(() => {
+            onView(card);
+            observer.disconnect();
+          }, VIEW_DELAY_MS);
+        } else {
+          clearTimeout(timer);
+        }
+      },
+      { threshold: 0.4 }
+    );
+    observer.observe(el);
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [ref, card, onView]);
 }
 
 function Media({ card }) {
@@ -82,13 +119,29 @@ function WikipediaCredit() {
   );
 }
 
-function Card({ card, liked, saved, onLike, onSave, onOpen }) {
+function Card({
+  card,
+  liked,
+  saved,
+  collections,
+  onLike,
+  onSave,
+  onOpen,
+  onTag,
+  onView,
+  onToggleCollection,
+  onCreateCollection,
+}) {
+  const ref = useRef(null);
+  useViewed(ref, card, onView);
+
   // Cards saved by the first version of the app have no `kind`.
   const kind = card.kind ?? 'article';
-  const topics = (card.categories ?? []).slice(0, 3);
+  const tags = (card.categories ?? []).slice(0, 4);
+  const away = Number.isFinite(card.distanceM) ? distanceLabel(card.distanceM) : '';
 
   return (
-    <article className={`card card-${kind}`}>
+    <article ref={ref} className={`card card-${kind}`}>
       {kind === 'media' ? (
         <Media card={card} />
       ) : (
@@ -108,8 +161,12 @@ function Card({ card, liked, saved, onLike, onSave, onOpen }) {
           </>
         )}
         {kind === 'media' && (
-          <p className="kicker">Wikimedia Commons · {card.mediaType === 'video' ? 'Video' : 'Image'}</p>
+          <p className="kicker">
+            Wikimedia Commons · {card.mediaType === 'video' ? 'Video' : 'Image'}
+            {away && ` · ${away}`}
+          </p>
         )}
+        {kind === 'article' && away && <p className="kicker">{away}</p>}
         {kind !== 'otd' && <h2 className="card-title">{card.title}</h2>}
 
         <p className="card-extract">{card.extract}</p>
@@ -128,11 +185,13 @@ function Card({ card, liked, saved, onLike, onSave, onOpen }) {
           </p>
         )}
 
-        {topics.length > 0 && (
-          <ul className="chips" aria-label="Topics">
-            {topics.map((t) => (
-              <li key={t} className="chip">
-                {t}
+        {tags.length > 0 && (
+          <ul className="chips" aria-label="Tags">
+            {tags.map((t) => (
+              <li key={t}>
+                <button type="button" className="chip" title={`More posts tagged "${t}"`} onClick={() => onTag?.(t)}>
+                  {t}
+                </button>
               </li>
             ))}
           </ul>
@@ -155,6 +214,14 @@ function Card({ card, liked, saved, onLike, onSave, onOpen }) {
           >
             {saved ? '★ Saved' : '☆ Save'}
           </button>
+          {onToggleCollection && (
+            <CollectionPicker
+              card={card}
+              collections={collections ?? {}}
+              onToggle={onToggleCollection}
+              onCreate={onCreateCollection}
+            />
+          )}
           {card.url && kind !== 'otd' && (
             <a
               className="action link"
