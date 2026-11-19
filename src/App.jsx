@@ -106,7 +106,7 @@ export default function App() {
     <div className="app">
       <header className="header">
         <div className="header-top">
-          <h1 className="brand">Learning Feed</h1>
+          <h1 className="brand">EduFeed</h1>
           <StreakBadge streak={profile.streak} />
           <nav className="tabs" aria-label="Views">
             <button
