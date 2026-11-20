@@ -17,7 +17,7 @@ import {
 } from './commons.js';
 import { BATCH, MEDIA_SLOTS, NEARBY_SLOTS, OTD_SLOTS, emptyParts } from './batch.js';
 import { personalRatio, pickSeeds } from './profile.js';
-import { categoryById } from './filters.js';
+import { categoryById, keywordsOf, topicsOf } from './filters.js';
 import { pick } from './random.js';
 
 // Ask for more articles than slots: some get filtered out, and a larger pool
@@ -79,10 +79,10 @@ async function byCategory(filter, { exclude }) {
   const slots = BATCH - MEDIA_SLOTS - (category.otd ? OTD_SLOTS : 0);
 
   const [random, otd, images, videos] = await Promise.all([
-    safe(fetchTopic(pick(category.topics), slots + EXTRA)),
+    safe(fetchTopic(pick(topicsOf(category)), slots + EXTRA)),
     category.otd ? safe(fetchOnThisDay(4, exclude)) : [],
-    safe(fetchCommonsImages(1, pick(category.keywords))),
-    safe(fetchCommonsVideos(1, pick(category.keywords))),
+    safe(fetchCommonsImages(1, pick(keywordsOf(category)))),
+    safe(fetchCommonsVideos(1, pick(keywordsOf(category)))),
   ]);
   return { parts: { random, otd, images, videos }, errors };
 }

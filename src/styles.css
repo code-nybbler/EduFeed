@@ -113,7 +113,8 @@ body {
   display: none;
 }
 
-.cat {
+.cat,
+.subcat {
   flex: none;
   padding: 5px 12px;
   font: inherit;
@@ -126,11 +127,13 @@ body {
   cursor: pointer;
 }
 
-.cat:hover {
+.cat:hover,
+.subcat:hover {
   border-color: var(--accent);
 }
 
-.cat.active {
+.cat.active,
+.subcat.active {
   font-weight: 600;
   color: var(--accent);
   background: var(--accent-soft);
@@ -140,6 +143,25 @@ body {
 .cat:disabled {
   opacity: 0.6;
   cursor: progress;
+}
+
+/* Second row (regions under World): a little smaller, so it reads as belonging to the row above. */
+.catbar.sub {
+  margin-top: -4px;
+}
+
+.subcat {
+  padding: 3px 10px;
+  font-size: 0.8rem;
+}
+
+/* Saved posts that haven't loaded (or are gone). */
+.card-stub .card-body {
+  padding-top: 14px;
+}
+
+.stub-message {
+  color: var(--muted);
 }
 
 .brand {

@@ -4,10 +4,14 @@
 // only calls loadProfile() and persistProfile(). A Firestore version would be
 // asynchronous (load once after sign-in, then write changes), so App.jsx's
 // `useState(loadProfile)` would become a load effect. Everything in profile.js
-// is pure and maps onto documents:
-//   users/{uid}                      -> likes, weights, settings, streak
-//   users/{uid}/saved/{cardId}       -> a saved card
-//   users/{uid}/collections/{id}     -> { name, createdAt, cardIds }
+// is pure, and the whole profile is small enough to be ONE document:
+//   users/{uid}  ->  { likes, weights, seen, settings, streak, saved, collections }
+// Loading it is a single read. `saved` is an array of small records
+// ({ id, kind, title, at }, about 80 bytes each), not whole cards: the Saved tab
+// fetches the cards again by id from Wikipedia and Commons (see cardCache.js), so
+// those lookups cost no Firestore reads. A document is limited to 1 MiB, so keep
+// an eye on the arrays that grow: `saved` (thousands of records fit), `likes`
+// (uncapped) and `seen` (capped at 1000).
 
 import { emptyProfile, normalizeProfile } from './profile.js';
 

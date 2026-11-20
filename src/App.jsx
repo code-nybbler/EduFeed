@@ -3,13 +3,16 @@ import Card from './components/Card.jsx';
 import CategoryBar from './components/CategoryBar.jsx';
 import CollectionBar from './components/CollectionBar.jsx';
 import Feed from './components/Feed.jsx';
+import SavedStub from './components/SavedStub.jsx';
 import StreakBadge from './components/StreakBadge.jsx';
+import { remember } from './cardCache.js';
+import { useSavedCards } from './useSavedCards.js';
 import { ALL, filterKey, tagFilter } from './filters.js';
 import { loadProfile, persistProfile } from './storage.js';
 import { useGeolocation } from './useGeolocation.js';
 import {
   addToCollection,
-  collectionCards,
+  collectionRecords,
   createCollection,
   deleteCollection,
   personalRatio,
@@ -40,7 +43,12 @@ export default function App() {
   }, []);
 
   const onLike = useCallback((card) => setProfile((p) => toggleLike(p, card)), []);
-  const onSave = useCallback((card) => setProfile((p) => toggleSave(p, card)), []);
+  const onSave = useCallback((card) => {
+    remember(card); // we have the full card now, so the Saved tab won't need to fetch it
+    setProfile((p) => toggleSave(p, card));
+  }, []);
+  // For saved posts that couldn't be loaded: only the id is known.
+  const onUnsave = useCallback((id) => setProfile((p) => toggleSave(p, { id, categories: [] })), []);
   const onOpen = useCallback((card) => setProfile((p) => recordOpen(p, card)), []);
 
   const onView = useCallback((card) => {
@@ -50,22 +58,26 @@ export default function App() {
   }, []);
 
   const onToggleCollection = useCallback(
-    (card, id) =>
+    (card, id) => {
+      remember(card);
       setProfile((p) =>
         p.collections[id]?.cardIds.includes(card.id)
           ? removeFromCollection(p, id, card.id)
           : addToCollection(p, id, card)
-      ),
+      );
+    },
     []
   );
 
   // From a card's picker: make the collection and put that card in it.
   const onCreateCollection = useCallback(
-    (name, card) =>
+    (name, card) => {
+      if (card) remember(card);
       setProfile((p) => {
         const { profile: next, id } = createCollection(p, name);
         return id && card ? addToCollection(next, id, card) : next;
-      }),
+      });
+    },
     []
   );
 
@@ -91,8 +103,16 @@ export default function App() {
 
   // ---------- Saved tab ----------
   const activeCollection = profile.collections[collectionId] ? collectionId : 'all';
-  const savedAll = Object.values(profile.saved).reverse();
-  const savedShown = activeCollection === 'all' ? savedAll : collectionCards(profile, activeCollection);
+  const savedRecords = useMemo(() => [...profile.saved].reverse(), [profile.saved]); // newest first
+  const savedIds = useMemo(() => new Set(profile.saved.map((r) => r.id)), [profile.saved]);
+  const shownRecords = useMemo(
+    () =>
+      activeCollection === 'all'
+        ? savedRecords
+        : collectionRecords({ saved: profile.saved, collections: profile.collections }, activeCollection),
+    [activeCollection, savedRecords, profile.saved, profile.collections]
+  );
+  const { items, retry, anyFailed } = useSavedCards(shownRecords, view === 'saved');
 
   const createFromBar = (name) => {
     const { profile: next, id } = createCollection(profile, name);
@@ -126,7 +146,7 @@ export default function App() {
                 window.scrollTo({ top: 0 });
               }}
             >
-              Saved ({savedAll.length})
+              Saved ({savedRecords.length})
             </button>
           </nav>
         </div>
@@ -183,6 +203,7 @@ export default function App() {
             filter={filter}
             profile={profile}
             setProfile={setProfile}
+            savedIds={savedIds}
             coords={geo.coords}
             actions={actions}
           />
@@ -192,7 +213,7 @@ export default function App() {
           <>
             <CollectionBar
               collections={profile.collections}
-              savedCount={savedAll.length}
+              savedCount={savedRecords.length}
               active={activeCollection}
               onSelect={setCollectionId}
               onCreate={createFromBar}
@@ -202,24 +223,36 @@ export default function App() {
                 setCollectionId('all');
               }}
             />
+            {anyFailed && (
+              <div className="notice" role="alert">
+                <span>Some saved posts couldn't be loaded.</span>
+                <button type="button" className="linkish" onClick={retry}>
+                  Try again
+                </button>
+              </div>
+            )}
             <div className="feed">
-              {savedShown.length === 0 && (
+              {items.length === 0 && (
                 <p className="status">
                   {activeCollection === 'all'
                     ? 'Nothing saved yet. Tap ☆ Save on anything you want to come back to.'
                     : 'This collection is empty. Tap 📁 Collect on any post to add it.'}
                 </p>
               )}
-              {savedShown.map((card) => (
-                <Card
-                  key={card.id}
-                  card={card}
-                  liked={Boolean(profile.likes[card.id])}
-                  saved
-                  collections={profile.collections}
-                  {...actions}
-                />
-              ))}
+              {items.map(({ record, card, state }) =>
+                card ? (
+                  <Card
+                    key={record.id}
+                    card={card}
+                    liked={Boolean(profile.likes[record.id])}
+                    saved
+                    collections={profile.collections}
+                    {...actions}
+                  />
+                ) : (
+                  <SavedStub key={record.id} record={record} state={state} onRemove={onUnsave} />
+                )
+              )}
             </div>
           </>
         )}

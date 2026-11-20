@@ -14,7 +14,7 @@ function endMessage(filter, hasCards) {
 }
 
 /** The infinite feed for one filter. Mount it with a `key` per filter so each filter starts fresh. */
-export default function Feed({ filter, profile, setProfile, coords, actions }) {
+export default function Feed({ filter, profile, setProfile, savedIds, coords, actions }) {
   const { cards, loading, error, done, loadMore } = useFeed(profile, setProfile, filter, coords);
   const sentinel = useRef(null);
 
@@ -41,7 +41,7 @@ export default function Feed({ filter, profile, setProfile, coords, actions }) {
             key={card.id}
             card={card}
             liked={Boolean(profile.likes[card.id])}
-            saved={Boolean(profile.saved[card.id])}
+            saved={savedIds.has(card.id)}
             collections={profile.collections}
             {...actions}
           />

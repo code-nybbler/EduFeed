@@ -171,3 +171,18 @@ export async function fetchNearbyPicked(coords, n, exclude = new Set()) {
   const pool = index.slice(0, 60).filter((e) => !exclude.has(e.pageid));
   return cardsForEntries(shuffle(pool).slice(0, Math.min(n, 20)));
 }
+
+/**
+ * Full cards for these page ids: how saved posts are brought back. Pages that no
+ * longer exist are left out of the result. Unlike the feed, nothing is filtered:
+ * the user saved these on purpose, even if the article has since become short.
+ * Callers send at most 20 ids at a time (the limit for extracts).
+ */
+export async function fetchArticlesByIds(ids) {
+  const data = await articleCall({ pageids: ids.join('|') });
+  return new Map(
+    pagesOf(data)
+      .filter((p) => !p.missing && !p.invalid)
+      .map((p) => [p.pageid, toCard(p)])
+  );
+}

@@ -194,3 +194,16 @@ export async function fetchCommonsNearby(coords, n, offset = 0) {
     .filter(Boolean);
   return { cards, next };
 }
+
+/** Full cards for saved Commons files, by card id ("commons:123"). Missing or unsuitable files are left out of the result. */
+export async function fetchCommonsByIds(ids) {
+  const pageIds = ids.map((id) => String(id).replace(/^commons:/, ''));
+  const data = await call({ ...INFO_PARAMS, pageids: pageIds.join('|') });
+  const found = new Map();
+  for (const page of pagesOf(data)) {
+    if (page.missing || page.invalid) continue;
+    const card = toMediaCard(page, { titleFallback: true });
+    if (card) found.set(card.id, card);
+  }
+  return found;
+}

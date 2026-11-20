@@ -12,7 +12,7 @@ export const MAX_NAME = 40;
 
 export const emptyProfile = () => ({
   likes: {}, // id -> { title, seed, at }
-  saved: {}, // id -> full card
+  saved: [], // saved posts, oldest first: { id, kind, title, at } (plus `snapshot` for "On this day" cards)
   collections: {}, // id -> { id, name, createdAt, cardIds: [] }; cards in them are always also in `saved`
   seen: [], // ids already shown, so the main feed never repeats
   weights: {}, // category -> interest score
@@ -27,11 +27,39 @@ export function normalizeProfile(stored) {
   return {
     ...base,
     ...s,
+    saved: normalizeSaved(s.saved),
     collections: s.collections ?? {},
     streak: { ...base.streak, ...s.streak },
     settings: { ...base.settings, ...s.settings },
   };
 }
+
+/**
+ * A saved post is stored as a small record, not the whole card: just enough to
+ * find it again and to show something if it can't be loaded. The full card is
+ * fetched by `id` when the Saved tab needs it (see cardCache.js). "On this day"
+ * cards are the exception: they aren't a single page that can be fetched again,
+ * so they keep a snapshot of the card.
+ */
+export function toRecord(card, at = Date.now()) {
+  const kind = card.kind ?? 'article';
+  const record = { id: card.id, kind, title: card.title, at };
+  if (kind === 'otd') record.snapshot = card;
+  return record;
+}
+
+// Older versions kept every saved card in full, in an object keyed by id.
+function normalizeSaved(saved) {
+  if (Array.isArray(saved)) return saved.filter((r) => r && r.id !== undefined);
+  if (saved && typeof saved === 'object') {
+    return Object.values(saved)
+      .filter((card) => card && card.id !== undefined)
+      .map((card, i) => toRecord(card, i)); // the old format didn't record when; keep the order
+  }
+  return [];
+}
+
+export const isSaved = (profile, id) => profile.saved.some((r) => r.id === id);
 
 export const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -62,10 +90,10 @@ export function toggleLike(profile, card) {
 }
 
 function saveCard(profile, card) {
-  if (profile.saved[card.id]) return profile;
+  if (isSaved(profile, card.id)) return profile;
   return {
     ...profile,
-    saved: { ...profile.saved, [card.id]: card },
+    saved: [...profile.saved, toRecord(card)],
     weights: bump(profile.weights, card.categories, 1),
   };
 }
@@ -79,9 +107,8 @@ function dropFromCollections(collections, cardId) {
 }
 
 export function toggleSave(profile, card) {
-  if (!profile.saved[card.id]) return saveCard(profile, card);
-  const saved = { ...profile.saved };
-  delete saved[card.id];
+  if (!isSaved(profile, card.id)) return saveCard(profile, card);
+  const saved = profile.saved.filter((r) => r.id !== card.id);
   return {
     ...profile,
     saved,
@@ -164,13 +191,14 @@ export function deleteCollection(profile, collectionId) {
   return { ...profile, collections };
 }
 
-/** The saved cards in a collection, most recently added first. */
-export function collectionCards(profile, collectionId) {
+/** The saved records in a collection, most recently added first. */
+export function collectionRecords(profile, collectionId) {
   const collection = profile.collections[collectionId];
   if (!collection) return [];
+  const byId = new Map(profile.saved.map((r) => [r.id, r]));
   return [...collection.cardIds]
     .reverse()
-    .map((id) => profile.saved[id])
+    .map((id) => byId.get(id))
     .filter(Boolean);
 }
 
@@ -189,7 +217,7 @@ export function setSetting(profile, key, value) {
 
 /** How much of each batch should come from "more like what you liked". */
 export function personalRatio(profile) {
-  const signals = Object.keys(profile.likes).length + Object.keys(profile.saved).length;
+  const signals = Object.keys(profile.likes).length + profile.saved.length;
   return Math.min(0.7, signals * 0.08);
 }
 

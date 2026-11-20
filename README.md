@@ -1,21 +1,6 @@
-# Learning Feed
+# EduFeed
 
 An endless, social-media-style feed of interesting articles, photos and videos that gradually adapts to what you like. Built with React and Vite. React is the only runtime dependency.
-
-## Run it
-
-```bash
-npm install
-npm run dev       # local dev server
-npm run build     # production build into dist/
-npm test          # logic tests + a simulated-browser end-to-end test (network is mocked)
-```
-
-## Deploy to GitHub Pages
-
-1. Push this folder to a GitHub repo with a `main` branch.
-2. In the repo, go to **Settings → Pages** and set **Source** to **GitHub Actions**.
-3. Every push to `main` runs `.github/workflows/deploy.yml`, which builds and publishes the site.
 
 ## Features
 
