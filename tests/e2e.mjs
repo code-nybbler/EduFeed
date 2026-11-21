@@ -65,11 +65,14 @@ const activeCat = () => $$('.cat.active').map(txt);
 
 let root1 = createRoot(document.getElementById('root'));
 io.budget = 1;
-await act(async () => { root1.render(React.createElement(App)); });
+await act(async () => { root1.render(React.createElement(App, { syncAdapter: null })); });
 await flush(300);
 
 // ---------- 1. first load ----------
-check('12 category buttons (For you, Near me, 10 topics)', $$('.cat').length === 12, String($$('.cat').length));
+const { topLevelCategories } = await server.ssrLoadModule('/src/filters.js');
+check('one main-row button per top-level category, plus For you and Near me', $$('.cat').length === topLevelCategories().length + 2, `${$$('.cat').length} vs ${topLevelCategories().length + 2}`);
+check('no second row until a category with sub-categories is chosen', $$('.subcat').length === 0);
+check('brand is EduFeed', txt($('.brand')) === 'EduFeed', txt($('.brand')));
 check('"For you" highlighted by default', eq(activeCat(), ['For you']));
 function eq(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
 const cards = $$('.card');
@@ -94,7 +97,7 @@ check('picker opens with empty hint', Boolean(firstArticle.querySelector('.picke
 await typeInto(firstArticle.querySelector('.picker-new input'), 'Rome stuff');
 await submit(firstArticle.querySelector('.picker-new'));
 const prof = stored(); const colId = Object.keys(prof.collections)[0];
-check('collection created with the card, card auto-saved', prof.collections[colId]?.name === 'Rome stuff' && prof.collections[colId].cardIds.length === 1 && Object.keys(prof.saved).length === 1);
+check('collection created with the card, card auto-saved', prof.collections[colId]?.name === 'Rome stuff' && prof.collections[colId].cardIds.length === 1 && prof.saved.length === 1 && !('extract' in prof.saved[0]) && !('image' in prof.saved[0]), JSON.stringify(prof.saved));
 check('button now says "In 1" and Save shows saved', txt(firstArticle).includes('In 1') && txt(firstArticle).includes('★ Saved'));
 // second collection via the picker, then tick/untick
 await typeInto(firstArticle.querySelector('.picker-new input'), 'Second');
@@ -104,7 +107,9 @@ await act(async () => { firstArticle.querySelectorAll('.picker-row input')[1].cl
 check('unticking removes it from that collection only', txt(firstArticle).includes('In 1'));
 
 // ---------- 4. Saved tab + collection management ----------
+log.length = 0;
 await click(button('Saved (1)'));
+check('Saved tab shows a post saved this session without fetching it again', !log.some((u) => u.searchParams.get('pageids')));
 check('Saved view shows pills: All saved, both collections, + New', eq($$('.pill').map(txt), ['All saved (1)', 'Rome stuff (1)', 'Second (0)', '＋ New collection']), JSON.stringify($$('.pill').map(txt)));
 await click(button('Second (0)'));
 check('empty collection message', txt($('.status')).includes('This collection is empty'));
@@ -117,7 +122,7 @@ await typeInto($('.collection-form input'), 'Brand new');
 await submit($('.collection-form'));
 check('create from bar selects the new collection', Boolean($('.pill.active')) && txt($('.pill.active')).startsWith('Brand new'));
 await click(button('Delete collection'));
-check('delete collection (cards stay saved)', !button('Brand new') && txt($('.pill.active')).startsWith('All saved') && Object.keys(stored().saved).length === 1);
+check('delete collection (cards stay saved)', !button('Brand new') && txt($('.pill.active')).startsWith('All saved') && stored().saved.length === 1);
 await click(button('Rome stuff'));
 check('collection view shows its card', $$('main > .feed .card').length === 1, String($$('main > .feed .card').length));
 // unsaving a card from Saved removes it from collections
@@ -153,6 +158,42 @@ await click(button('Science', $('.catbar')));
 await flush(400);
 check('Science: no On this day, topic cards present', eq(activeCat(), ['Science']) && $$('.card-otd').length === 0 && $$('.card-article').length > 0);
 
+// ---------- 6b. regions: a second row under World ----------
+io.budget = 1; log.length = 0;
+await click(button('World', $('.catbar')));
+await flush(400);
+check('World highlighted; its row of regions appears', eq(activeCat(), ['World']) && eq($$('.subcat').map(txt), ['Worldwide', 'Africa', 'Asia', 'Europe', 'Americas', 'Oceania']), JSON.stringify($$('.subcat').map(txt)));
+check('"Worldwide" is selected in the second row', eq($$('.subcat.active').map(txt), ['Worldwide']));
+check('the main row has no region buttons', !$$('.cat').some((b) => ['Africa', 'Asia', 'Europe', 'Americas', 'Oceania'].includes(txt(b))));
+io.budget = 1; log.length = 0;
+await click($$('.subcat').find((b) => txt(b) === 'Asia'));
+await flush(400);
+check('picking a region keeps World highlighted and marks the region', eq(activeCat(), ['World']) && eq($$('.subcat.active').map(txt), ['Asia']));
+const asiaTopics = ['asia', 'central-asia', 'east-asia', 'north-asia', 'south-asia', 'southeast-asia', 'west-asia'];
+const topicSearches = log.map((u) => u.searchParams.get('gsrsearch') ?? '').filter((q) => q.startsWith('articletopic:'));
+check("the region's feed searches that region's topics", topicSearches.length > 0 && topicSearches.every((q) => asiaTopics.includes(q.slice(13))), topicSearches.join());
+await click(button('Health', $('.catbar')));
+await flush(300);
+check('leaving World hides the region row', $$('.subcat').length === 0 && eq(activeCat(), ['Health']));
+
+// ---------- 6c. the other groups work the same way ----------
+const searchesSince = () => log.map((u) => u.searchParams.get('gsrsearch') ?? '').filter((q) => q.startsWith('articletopic:'));
+io.budget = 1; log.length = 0;
+await click(button('Arts', $('.catbar')));
+await flush(400);
+check('Arts opens its own row of sub-categories', eq(activeCat(), ['Arts']) && eq($$('.subcat').map(txt), ['All Arts', 'Visual arts', 'Music', 'Stage', 'Architecture', 'Fashion', 'Books']), JSON.stringify($$('.subcat').map(txt)));
+const artsTopics = ['visual-arts', 'music', 'performing-arts', 'architecture', 'fashion', 'books', 'literature'];
+check('"All Arts" draws from every kind of art', searchesSince().length > 0 && searchesSince().every((q) => artsTopics.includes(q.slice(13))), searchesSince().join());
+io.budget = 1; log.length = 0;
+await click($$('.subcat').find((b) => txt(b) === 'Music'));
+await flush(400);
+check('a sub-category searches only its own topic; the parent stays highlighted', eq(activeCat(), ['Arts']) && eq($$('.subcat.active').map(txt), ['Music']) && searchesSince().length > 0 && searchesSince().every((q) => q === 'articletopic:music'), searchesSince().join());
+await click(button('Entertainment', $('.catbar')));
+await flush(300);
+check('switching groups swaps the second row', eq($$('.subcat').map(txt), ['All Entertainment', 'Film & TV', 'Games', 'Comics & anime', 'Internet', 'Media']), JSON.stringify($$('.subcat').map(txt)));
+await click(button('Health', $('.catbar')));
+await flush(200);
+
 // ---------- 7. Near me ----------
 io.budget = 6; log.length = 0; geoMode = 'grant';
 await click(button('Near me', $('.catbar')));
@@ -172,7 +213,7 @@ check('opt-in to mix nearby into For you is saved', stored().settings.nearby ===
 await act(async () => { root1.unmount(); });
 root1 = createRoot(document.getElementById('root'));
 io.budget = 0;
-await act(async () => { root1.render(React.createElement(App)); });
+await act(async () => { root1.render(React.createElement(App, { syncAdapter: null })); });
 await flush(200);
 check('after reload: streak badge still done', Boolean($('.streak.done')));
 check('after reload: collections, saved count and settings kept', Boolean(button('Saved (0)')) && Object.keys(stored().collections).length === 2 && stored().settings.nearby === true, JSON.stringify(Object.values(stored().collections).map((c) => c.name)));
@@ -184,22 +225,98 @@ window.localStorage.clear();
 window.localStorage.setItem('learnfeed:v1', JSON.stringify({ settings: { nearby: true } }));
 setPermission('prompt'); geoCalls = 0; io.budget = 2;
 root1 = createRoot(document.getElementById('root'));
-await act(async () => { root1.render(React.createElement(App)); });
+await act(async () => { root1.render(React.createElement(App, { syncAdapter: null })); });
 await flush(400);
 check('permission not yet granted: no location prompt on load', geoCalls === 0, String(geoCalls));
 await act(async () => { root1.unmount(); });
 setPermission('granted'); geoCalls = 0; io.budget = 4;
 root1 = createRoot(document.getElementById('root'));
-await act(async () => { root1.render(React.createElement(App)); });
+await act(async () => { root1.render(React.createElement(App, { syncAdapter: null })); });
 await until(() => $$('.kicker').some((k) => k.textContent.includes('📍')), 40);
 check('permission already granted: location restored silently', geoCalls === 1, String(geoCalls));
 check('opted-in user sees nearby places mixed into For you', $$('.kicker').some((k) => k.textContent.includes('📍')), $$('.kicker').map(txt).join(' / '));
+
+// ---------- 8c. saved posts come back from their ids ----------
+const resetApp = async (profileJson, props = { syncAdapter: null }) => {
+  await act(async () => { root1.unmount(); });
+  window.localStorage.clear();
+  if (profileJson) window.localStorage.setItem('learnfeed:v1', JSON.stringify(profileJson));
+  io.budget = 0; log.length = 0;
+  root1 = createRoot(document.getElementById('root'));
+  await act(async () => { root1.render(React.createElement(App, props)); });
+  await flush(200);
+};
+const moon = { id: 'otd:event:1969:abc', kind: 'otd', section: 'event', year: 1969, yearLabel: '1969', yearsAgo: 57, dateLabel: 'July 20', title: '1969', extract: 'Humans land on the Moon.', related: [], categories: [] };
+await resetApp({ saved: [
+  { id: 1201, kind: 'article', title: 'Saved article', at: 1 },
+  { id: 'commons:5002', kind: 'media', title: 'Saved picture', at: 2 },
+  { id: moon.id, kind: 'otd', title: '1969', at: 3, snapshot: moon },
+  { id: 9000009, kind: 'article', title: 'Deleted page', at: 4 },
+] });
+check('nothing is fetched until the Saved tab is opened', !log.some((u) => u.searchParams.get('pageids')));
+await click(button('Saved (4)'));
+await until(() => $$('main > .feed .card').length === 4 && !txt($('main > .feed')).includes('Loading…'));
+const byIdReqs = log.filter((u) => u.searchParams.get('pageids'));
+const wpReq = byIdReqs.filter((u) => u.host === 'en.wikipedia.org');
+const cmReq = byIdReqs.filter((u) => u.host === 'commons.wikimedia.org');
+check('one batched request per site', wpReq.length === 1 && cmReq.length === 1 && wpReq[0].searchParams.get('pageids').split('|').sort().join() === '1201,9000009' && cmReq[0].searchParams.get('pageids') === '5002', byIdReqs.map((u) => u.searchParams.get('pageids')).join(' / '));
+const savedText = txt($('main > .feed'));
+check('article, picture and "On this day" post are all restored', savedText.includes('Place 201') && savedText.includes('Local photo 5002') && savedText.includes('Humans land on the Moon.'));
+check('a deleted page shows a clear placeholder, with a link out', $$('.card-stub').length === 1 && txt($('.card-stub')).includes('Deleted page') && txt($('.card-stub')).includes('no longer available') && Boolean($('.card-stub a[href*="curid=9000009"]')));
+await click(button('★ Saved', $('.card-stub')));
+check('removing the placeholder unsaves it', stored().saved.length === 3 && $$('.card-stub').length === 0, String(stored().saved.length));
+
+await resetApp({ saved: [{ id: 1301, kind: 'article', title: 'Offline article', at: 1 }] });
+mocks.state.fail = true;
+await click(button('Saved (1)'));
+await until(() => Boolean($('.notice')));
+check('offline: the post stays saved, shown as not loaded, with a retry', txt($('.card-stub')).includes("Couldn't load") && txt($('.notice')).includes("couldn't be loaded") && stored().saved.length === 1);
+mocks.state.fail = false;
+await click(button('Try again', $('.notice')));
+await until(() => $$('main > .feed .card-stub').length === 0);
+check('retry brings the card back', txt($('main > .feed')).includes('Place 301') && !$('.notice'));
+
+await resetApp({ likes: {}, seen: [1401], weights: {}, saved: { 1401: { id: 1401, kind: 'article', title: 'Old full card', extract: 'old text '.repeat(40), image: null, url: 'https://x', categories: ['Old'] } } });
+check('old-format saves are converted to records on first load', Array.isArray(stored().saved) && stored().saved.length === 1 && stored().saved[0].id === 1401 && !('extract' in stored().saved[0]), JSON.stringify(stored().saved));
+await click(button('Saved (1)'));
+await until(() => $$('main > .feed .card').length === 1 && !txt($('main > .feed')).includes('Loading…'));
+check('and they still appear in Saved (fetched by id)', txt($('main > .feed')).includes('Place 401'));
+
+// ---------- 8d. cloud sync ----------
+check('sync off: no sync icon', !$('.sync'));
+const fakeCloud = () => {
+  const c = { docs: new Map(), writes: [], reads: 0 };
+  c.signIn = async () => 'u1';
+  c.load = async (uid) => { c.reads++; return c.docs.get(uid) ?? null; };
+  c.save = async (uid, json, rev) => { const cur = c.docs.get(uid)?.rev ?? 0; if (cur !== rev) return { ok: false }; c.docs.set(uid, { json, rev: cur + 1 }); c.writes.push(json); return { ok: true, rev: cur + 1 }; };
+  return c;
+};
+const cloud = fakeCloud();
+cloud.docs.set('u1', { rev: 4, json: JSON.stringify({ saved: [{ id: 1201, kind: 'article', title: 'From the cloud', at: 5 }], collections: {}, likes: {}, weights: {}, seen: [], streak: {}, settings: {} }) });
+await resetApp(null, { syncAdapter: cloud, syncDebounceMs: 50 });
+await until(() => Boolean(button('Saved (1)')));
+check('a profile that lives in the cloud appears on a fresh device', Boolean(button('Saved (1)')) && stored().saved[0].id === 1201 && cloud.writes.length === 0);
+check('the header shows it is synced', $('.sync')?.classList.contains('sync-synced') && $('.sync').getAttribute('aria-label').includes('Saved to your account'), $('.sync')?.className);
+await click(button('Saved (1)'));
+await click(button('＋ New collection'));
+await typeInto($('.collection-form input'), 'Synced collection');
+await submit($('.collection-form'));
+check('a change is not uploaded the instant it is made', cloud.writes.length === 0 && stored().collections && Object.keys(stored().collections).length === 1);
+await until(() => cloud.writes.length === 1);
+const uploaded = JSON.parse(cloud.writes[0]);
+check('...it is uploaded after a quiet moment, with everything in it', cloud.writes.length === 1 && Object.values(uploaded.collections).some((c) => c.name === 'Synced collection') && uploaded.saved.length === 1);
+check('sync bookkeeping is stored on the device', JSON.parse(window.localStorage.getItem('learnfeed:sync:v1')).rev === 5 && JSON.parse(window.localStorage.getItem('learnfeed:sync:v1')).dirty === false);
+
+const broken = { async signIn() { throw Object.assign(new Error('nope'), { code: 'auth/operation-not-allowed' }); }, async load() { return null; }, async save() { return { ok: false }; } };
+await resetApp({ saved: [{ id: 1301, kind: 'article', title: 'Local only', at: 1 }] }, { syncAdapter: broken });
+await until(() => Boolean($('.sync-error')));
+check('a sync problem shows a warning with its code, and the app keeps working', $('.sync-error').getAttribute('title').includes('auth/operation-not-allowed') && $('.sync-error').getAttribute('title').includes('still saved on this device') && Boolean(button('Saved (1)')));
 
 // ---------- 9. location denied ----------
 await act(async () => { root1.unmount(); });
 window.localStorage.clear(); geoMode = 'deny';
 root1 = createRoot(document.getElementById('root'));
-await act(async () => { root1.render(React.createElement(App)); });
+await act(async () => { root1.render(React.createElement(App, { syncAdapter: null })); });
 await flush(200);
 await click(button('Near me', $('.catbar')));
 await flush(100);

@@ -44,7 +44,7 @@ export function install() {
       }
       if (q.get('pageids')) {
         const ids = q.get('pageids').split('|').map(Number);
-        return json({ query: { pages: ids.map((id) => cmPage(id, `Local photo ${id}.jpg`, { video: id % 5 === 0 })) } });
+        return json({ query: { pages: ids.map((id) => (id >= 9e6 ? { pageid: id, missing: true } : cmPage(id, `Local photo ${id}.jpg`, { video: id % 5 === 0 }))) } });
       }
       const s = q.get('gsrsearch'); const off = Number(q.get('gsroffset') ?? 0); const lim = Number(q.get('gsrlimit'));
       if (s.startsWith('incategory:"Ancient Rome"')) {
@@ -60,7 +60,7 @@ export function install() {
     }
     if (q.get('pageids')) {
       const ids = q.get('pageids').split('|').map(Number);
-      return json({ query: { pages: [...ids].reverse().map((id) => wpPage(id, `Place ${id - 1000}`, { cats: ['Landmarks'] })) } }); // reversed: code must re-sort
+      return json({ query: { pages: [...ids].reverse().map((id) => (id >= 9e6 ? { pageid: id, missing: true } : wpPage(id, `Place ${id - 1000}`, { cats: ['Landmarks'] }))) } }); // reversed: code must re-sort. Ids from 9,000,000 up are deleted pages
     }
     if (q.get('generator') === 'random') {
       return json({ query: { pages: Array.from({ length: 8 }, (_, i) => wpPage(2000 + Math.floor(Math.random() * 1e6), `Random ${i}`, { image: i % 2 === 0, cats: ['Misc'] })) } });

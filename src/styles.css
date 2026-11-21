@@ -59,6 +59,38 @@ body {
   margin-left: auto;
 }
 
+.sync {
+  font-size: 1rem;
+  line-height: 1;
+  color: var(--muted);
+  cursor: default;
+}
+
+.sync-syncing span {
+  display: inline-block;
+  animation: spin 1.2s linear infinite;
+}
+
+.sync-offline {
+  opacity: 0.5;
+}
+
+.sync-error {
+  color: var(--accent);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sync-syncing span {
+    animation: none;
+  }
+}
+
 .streak {
   display: inline-flex;
   align-items: center;

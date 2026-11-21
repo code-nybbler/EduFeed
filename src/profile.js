@@ -241,3 +241,100 @@ export function scoreCard(card, weights) {
   for (const c of card.categories ?? []) score += Math.min(weights[c] ?? 0, 10);
   return score;
 }
+
+// ---------- combining two copies of a profile (for cloud sync) ----------
+
+/** True for a profile with nothing worth keeping: a brand-new user. (`seen` alone doesn't count.) */
+export function isEmptyProfile(p) {
+  return (
+    Object.keys(p.likes).length === 0 &&
+    p.saved.length === 0 &&
+    Object.keys(p.collections).length === 0 &&
+    Object.keys(p.weights).length === 0 &&
+    p.streak.best === 0 &&
+    p.streak.todayCount === 0
+  );
+}
+
+const unique = (list) => [...new Set(list)];
+
+function mergeStreaks(a, b) {
+  const sameLast = a.lastDay === b.lastDay;
+  const later = (a.lastDay ?? '') >= (b.lastDay ?? '') ? a : b; // 'YYYY-MM-DD' sorts correctly as text
+  const current = sameLast ? Math.max(a.current, b.current) : later.current;
+  const sameToday = a.todayDay === b.todayDay;
+  const today = (a.todayDay ?? '') >= (b.todayDay ?? '') ? a : b;
+  return {
+    current,
+    best: Math.max(a.best, b.best, current),
+    lastDay: later.lastDay,
+    todayDay: today.todayDay,
+    todayCount: sameToday ? Math.max(a.todayCount, b.todayCount) : today.todayCount,
+  };
+}
+
+/**
+ * Combines two copies of a profile without losing anything either has: likes, saves and
+ * collections are unioned, interest weights take the larger value, and the streak with
+ * the more recent day wins. `a` is this device's copy and wins small ties (a collection's
+ * name, a setting).
+ *
+ * This is a union, so it cannot tell "deleted on one device" from "never had it": something
+ * unsaved or unliked on one device comes back if the other device still has it. That is the
+ * safe direction for a reading app, and it only happens when both copies changed since they
+ * last synced.
+ */
+export function mergeProfiles(a, b) {
+  const likes = { ...b.likes };
+  for (const [id, like] of Object.entries(a.likes)) {
+    likes[id] = (likes[id]?.at ?? 0) > (like.at ?? 0) ? likes[id] : like;
+  }
+
+  const savedById = new Map();
+  for (const record of [...a.saved, ...b.saved]) {
+    if (!savedById.has(record.id)) savedById.set(record.id, record);
+  }
+  const saved = [...savedById.values()].sort((x, y) => (x.at ?? 0) - (y.at ?? 0));
+
+  const byId = new Map();
+  for (const c of [...Object.values(a.collections), ...Object.values(b.collections)]) {
+    const seen = byId.get(c.id);
+    if (!seen) {
+      byId.set(c.id, { ...c, cardIds: [...c.cardIds] });
+    } else {
+      seen.cardIds = unique([...seen.cardIds, ...c.cardIds]);
+      seen.createdAt = Math.min(seen.createdAt, c.createdAt);
+    }
+  }
+  // Two devices that each made a collection with the same name end up with one.
+  const byName = new Map();
+  const collections = {};
+  for (const c of [...byId.values()].sort((x, y) => x.createdAt - y.createdAt)) {
+    const home = byName.get(c.name.toLowerCase());
+    if (home) {
+      home.cardIds = unique([...home.cardIds, ...c.cardIds]);
+    } else {
+      byName.set(c.name.toLowerCase(), c);
+      collections[c.id] = c;
+    }
+  }
+  const kept = Object.values(collections).slice(0, MAX_COLLECTIONS);
+  const savedIds = new Set(saved.map((r) => r.id));
+  const finalCollections = Object.fromEntries(
+    kept.map((c) => [c.id, { ...c, cardIds: c.cardIds.filter((id) => savedIds.has(id)) }])
+  );
+
+  const weights = { ...b.weights };
+  for (const [key, w] of Object.entries(a.weights)) weights[key] = Math.max(weights[key] ?? 0, w);
+
+  return {
+    ...a,
+    likes,
+    saved,
+    collections: finalCollections,
+    weights,
+    seen: unique([...b.seen, ...a.seen]).slice(-MAX_SEEN),
+    streak: mergeStreaks(a.streak, b.streak),
+    settings: { ...b.settings, ...a.settings },
+  };
+}

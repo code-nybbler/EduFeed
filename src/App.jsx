@@ -5,8 +5,10 @@ import CollectionBar from './components/CollectionBar.jsx';
 import Feed from './components/Feed.jsx';
 import SavedStub from './components/SavedStub.jsx';
 import StreakBadge from './components/StreakBadge.jsx';
+import SyncStatus from './components/SyncStatus.jsx';
 import { remember } from './cardCache.js';
 import { useSavedCards } from './useSavedCards.js';
+import { useSync } from './useSync.js';
 import { ALL, filterKey, tagFilter } from './filters.js';
 import { loadProfile, persistProfile } from './storage.js';
 import { useGeolocation } from './useGeolocation.js';
@@ -25,12 +27,14 @@ import {
   touchStreak,
 } from './profile.js';
 
-export default function App() {
+// `syncAdapter`: leave out for Firebase, `null` to switch syncing off, or an object to use instead (tests).
+export default function App({ syncAdapter, syncDebounceMs } = {}) {
   const [profile, setProfile] = useState(loadProfile);
   const [view, setView] = useState('feed');
   const [filter, setFilter] = useState(ALL);
   const [collectionId, setCollectionId] = useState('all');
   const geo = useGeolocation();
+  const sync = useSync(profile, setProfile, { adapter: syncAdapter, debounceMs: syncDebounceMs });
   const viewed = useRef(new Set()); // cards already counted toward today's streak this session
 
   useEffect(() => persistProfile(profile), [profile]);
@@ -128,6 +132,7 @@ export default function App() {
         <div className="header-top">
           <h1 className="brand">EduFeed</h1>
           <StreakBadge streak={profile.streak} />
+          <SyncStatus status={sync} />
           <nav className="tabs" aria-label="Views">
             <button
               type="button"
