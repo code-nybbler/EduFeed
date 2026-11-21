@@ -7,6 +7,11 @@
 //   load(uid)                          -> { json, rev } or null if there is no cloud copy yet
 //   save(uid, json, expectedRev)       -> { ok: true, rev } or { ok: false } if the cloud copy
 //                                         changed since `expectedRev` (so nothing is overwritten)
+// plus, for accounts:
+//   getUser()                          -> { uid, isAnonymous, name, email, photo } or null
+//   onUser(callback)                   -> calls back whenever the signed-in user changes; returns an unsubscribe
+//   signInWithGoogle()                 -> opens Google's sign-in window (see below)
+//   signOut()
 //
 // The cloud copy is ONE document, users/{uid}:
 //   { v: 1, data: "<the whole profile as JSON text>", rev: <number>, updatedAt: <server time> }
@@ -14,9 +19,32 @@
 // about field names, nested arrays and per-field indexes, and means one read and one write per sync.
 
 import { getApp, getApps, initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import {
+  GoogleAuthProvider,
+  getAuth,
+  linkWithPopup,
+  onAuthStateChanged,
+  signInAnonymously,
+  signInWithCredential,
+  signInWithPopup,
+  signOut,
+} from 'firebase/auth';
 import { doc, getDoc, getFirestore, runTransaction, serverTimestamp } from 'firebase/firestore';
 import { firebaseConfig } from './firebaseConfig.js';
+
+// A person's name, email and photo. Right after an anonymous account is upgraded they can still be
+// empty on the user object itself, but the provider's copy (providerData) always has them.
+function describe(user) {
+  if (!user) return null;
+  const from = (key) => user[key] || user.providerData.find((p) => p?.[key])?.[key] || '';
+  return {
+    uid: user.uid,
+    isAnonymous: user.isAnonymous,
+    name: from('displayName'),
+    email: from('email'),
+    photo: from('photoURL'),
+  };
+}
 
 export function createFirebaseAdapter() {
   const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
@@ -31,6 +59,32 @@ export function createFirebaseAdapter() {
       const credential = await signInAnonymously(auth);
       return credential.user.uid;
     },
+
+    getUser: () => describe(auth.currentUser),
+
+    onUser: (callback) => onAuthStateChanged(auth, (user) => callback(describe(user))),
+
+    /**
+     * First choice: attach Google to the account the person already has (they are anonymous
+     * until now), so the same uid and all their data carry over. If that Google account is
+     * already used by an account (say, from another device), switch to that account instead;
+     * the sync engine then merges this device's data into it.
+     */
+    async signInWithGoogle() {
+      const provider = new GoogleAuthProvider();
+      await auth.authStateReady();
+      try {
+        if (auth.currentUser) await linkWithPopup(auth.currentUser, provider);
+        else await signInWithPopup(auth, provider);
+      } catch (e) {
+        if (e?.code !== 'auth/credential-already-in-use') throw e;
+        const credential = GoogleAuthProvider.credentialFromError(e);
+        if (!credential) throw e;
+        await signInWithCredential(auth, credential);
+      }
+    },
+
+    signOut: () => signOut(auth),
 
     async load(uid) {
       const snap = await getDoc(ref(uid));

@@ -20,6 +20,7 @@ import { isEmptyProfile, mergeProfiles, normalizeProfile } from './profile.js';
 
 export const DEBOUNCE_MS = 20000;
 export const MAX_BYTES = 900000; // a Firestore document holds up to 1 MiB
+export const REFRESH_MS = 60000; // coming back to the tab checks the cloud copy, at most this often
 const MAX_TRIES = 4; // compare-and-set conflicts in one sync before giving up until the next one
 const RETRY_MS = [5000, 15000, 45000, 120000, 300000];
 
@@ -75,6 +76,9 @@ export function createSync({
   let failures = 0;
   let debounceTimer = null;
   let retryTimer = null;
+  let inflight = Promise.resolve();
+  let lastRunAt = 0;
+  const clock = timers.now ?? (() => Date.now());
 
   const persist = () => store.save(meta);
 
@@ -140,37 +144,42 @@ export function createSync({
     retryTimer = timers.set(syncNow, wait);
   }
 
-  async function syncNow() {
-    if (stopped) return;
+  /** Syncs now. The promise settles when it (and any run queued behind it) is finished; it never rejects: problems go to onStatus. */
+  function syncNow() {
+    if (stopped) return Promise.resolve();
     if (running) {
       again = true; // finish this one, then go once more
-      return;
+      return inflight;
     }
     running = true;
+    lastRunAt = clock();
     timers.clear(debounceTimer);
     timers.clear(retryTimer);
-    try {
-      if (!isOnline()) {
-        onStatus({ state: 'offline' });
-        failures = Math.max(failures, 1);
+    inflight = (async () => {
+      try {
+        if (!isOnline()) {
+          onStatus({ state: 'offline' });
+          failures = Math.max(failures, 1);
+          scheduleRetry();
+          return;
+        }
+        onStatus({ state: 'syncing' });
+        await cycle();
+        failures = 0;
+        onStatus({ state: 'synced' });
+      } catch (e) {
+        failures += 1;
+        onStatus(isOnline() ? { state: 'error', code: e?.code ?? 'unknown', message: e?.message } : { state: 'offline' });
         scheduleRetry();
-        return;
+      } finally {
+        running = false;
+        if (again && !stopped) {
+          again = false;
+          await syncNow();
+        }
       }
-      onStatus({ state: 'syncing' });
-      await cycle();
-      failures = 0;
-      onStatus({ state: 'synced' });
-    } catch (e) {
-      failures += 1;
-      onStatus(isOnline() ? { state: 'error', code: e?.code ?? 'unknown', message: e?.message } : { state: 'offline' });
-      scheduleRetry();
-    } finally {
-      running = false;
-      if (again && !stopped) {
-        again = false;
-        syncNow();
-      }
-    }
+    })();
+    return inflight;
   }
 
   return {
@@ -187,6 +196,19 @@ export function createSync({
       persist();
       timers.clear(debounceTimer);
       debounceTimer = timers.set(syncNow, debounceMs);
+    },
+
+    /** The tab came back into view: pick up changes made on another device, but not more than once a minute. */
+    refresh() {
+      return !stopped && clock() - lastRunAt >= REFRESH_MS ? syncNow() : Promise.resolve();
+    },
+
+    /** Forget the account and replace the local profile (signing out). Not counted as a change. */
+    resetTo(profile) {
+      meta = { uid: null, rev: 0, dirty: false };
+      failures = 0;
+      persist();
+      apply(profile);
     },
 
     /** Upload any pending changes now (the page is being hidden or closed). */

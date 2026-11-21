@@ -9,6 +9,7 @@ const settle = async () => { for (let i = 0; i < 5; i++) await tick(); };
 
 const prof = await import(src + 'profile.js');
 const sync = await import(src + 'sync.js');
+const { authMessage } = await import(src + 'authMessages.js');
 
 const card = (id, cats = ['C']) => ({ id, kind: 'article', title: `T${id}`, extract: 'x', categories: cats });
 const withSave = (p, id) => prof.toggleSave(p, card(id));
@@ -98,6 +99,7 @@ const mkTimers = () => {
       now = end;
     },
     pending: () => q.size,
+    now: () => now,
   };
 };
 const mkAdapter = (uid = 'u1') => {
@@ -248,6 +250,46 @@ function setup({ profile = E(), adapter = mkAdapter(), meta = null, debounceMs =
   await h.t.advance(60000);
   check('...and nothing more is written', h.adapter.writes === 1);
 }
+
+{ // awaitable syncNow
+  const ad = mkAdapter(); const h = setup({ adapter: ad, profile: withSave(E(), 1) });
+  let edited = false;
+  ad.beforeSave = async () => { if (!edited) { edited = true; h.change((p) => withSave(p, 2)); } }; // edited while the upload is in flight
+  const done = h.engine.syncNow();
+  const again = h.engine.syncNow(); // queues one more run
+  await done;
+  check('syncNow() resolves only after the run queued behind it has finished', ad.writes === 2 && eq(ids(remoteOf(ad, 'u1')), [1, 2]) && h.meta.dirty === false, String(ad.writes));
+  await again;
+  const bad = mkAdapter(); bad.failSignIn = new Error('x');
+  const hb = setup({ adapter: bad });
+  let rejected = false; await hb.engine.syncNow().catch(() => { rejected = true; });
+  check('syncNow() never rejects; the problem goes to the status', !rejected && hb.last().state === 'error');
+}
+{ // refresh
+  const h = setup(); h.engine.start(); await settle();
+  const reads = () => h.adapter.reads;
+  const r0 = reads();
+  await h.engine.refresh(); await settle();
+  check('refresh right after a sync does nothing', reads() === r0);
+  await h.t.advance(59000); await h.engine.refresh(); await settle();
+  check('...still nothing at 59 s', reads() === r0);
+  await h.t.advance(2000); await h.engine.refresh(); await settle();
+  check('...but after a minute it checks the cloud', reads() === r0 + 1);
+  await h.engine.refresh(); await settle();
+  check('and then waits another minute', reads() === r0 + 1);
+}
+{ // resetTo (sign out)
+  const ad = mkAdapter(); const h = setup({ adapter: ad, profile: withSave(E(), 1) }); await h.engine.syncNow();
+  h.engine.resetTo(E());
+  check('resetTo: profile replaced, account forgotten, nothing dirty, nothing queued', prof.isEmptyProfile(h.profile) && h.meta.uid === null && h.meta.rev === 0 && h.meta.dirty === false && h.t.pending() === 0);
+  ad.uid = 'u2'; await h.engine.syncNow();
+  check('...the next sync starts a fresh account without touching the old document', h.meta.uid === 'u2' && ad.writes === 1 && eq(ids(remoteOf(ad, 'u1')), [1]) && !ad.docs.has('u2'), String(ad.writes));
+}
+
+// ====================== sign-in messages ======================
+check('closing the sign-in window needs no message', ['auth/popup-closed-by-user', 'auth/cancelled-popup-request', 'auth/user-cancelled'].every((c) => authMessage({ code: c }) === null));
+check('pop-up blocked, unauthorized domain, provider off, offline: each has its own plain message', new Set(['auth/popup-blocked', 'auth/unauthorized-domain', 'auth/operation-not-allowed', 'auth/network-request-failed'].map((c) => authMessage({ code: c }))).size === 4 && authMessage({ code: 'auth/popup-blocked' }).includes('pop-up') && authMessage({ code: 'auth/unauthorized-domain' }).includes('Authorized domains'));
+check('unknown errors show their code; "unsynced" shows its own text', authMessage({ code: 'auth/weird' }).includes('auth/weird') && authMessage({ code: 'unsynced', message: 'Hold on' }) === 'Hold on');
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall checks passed');
 process.exit(failed ? 1 : 0);

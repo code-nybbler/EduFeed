@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Card from './components/Card.jsx';
 import CategoryBar from './components/CategoryBar.jsx';
+import AccountMenu from './components/AccountMenu.jsx';
 import CollectionBar from './components/CollectionBar.jsx';
 import Feed from './components/Feed.jsx';
 import SavedStub from './components/SavedStub.jsx';
@@ -34,7 +35,7 @@ export default function App({ syncAdapter, syncDebounceMs } = {}) {
   const [filter, setFilter] = useState(ALL);
   const [collectionId, setCollectionId] = useState('all');
   const geo = useGeolocation();
-  const sync = useSync(profile, setProfile, { adapter: syncAdapter, debounceMs: syncDebounceMs });
+  const cloud = useSync(profile, setProfile, { adapter: syncAdapter, debounceMs: syncDebounceMs });
   const viewed = useRef(new Set()); // cards already counted toward today's streak this session
 
   useEffect(() => persistProfile(profile), [profile]);
@@ -132,7 +133,15 @@ export default function App({ syncAdapter, syncDebounceMs } = {}) {
         <div className="header-top">
           <h1 className="brand">EduFeed</h1>
           <StreakBadge streak={profile.streak} />
-          <SyncStatus status={sync} />
+          <SyncStatus status={cloud.status} />
+          {cloud.canSignIn && cloud.account !== undefined && (
+            <AccountMenu
+              account={cloud.account}
+              busy={cloud.busy}
+              onSignIn={cloud.signIn}
+              onSignOut={cloud.signOut}
+            />
+          )}
           <nav className="tabs" aria-label="Views">
             <button
               type="button"
@@ -159,6 +168,15 @@ export default function App({ syncAdapter, syncDebounceMs } = {}) {
       </header>
 
       <main className="main">
+        {cloud.authError && (
+          <div className="notice" role="alert">
+            <span>{cloud.authError}</span>
+            <button type="button" className="linkish" onClick={cloud.clearAuthError}>
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {geo.error && (
           <div className="notice" role="alert">
             <span>{geo.error}</span>

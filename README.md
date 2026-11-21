@@ -46,11 +46,21 @@ The app always reads and writes the copy on the device, so it opens instantly an
 - **When:** changes are batched and uploaded after 20 seconds of quiet, and right away when the page is hidden or closed. `seen` and the day's reading count never trigger an upload by themselves; they go along with the next real change. Edit `DEBOUNCE_MS` in `src/sync.js` to change this.
 - **Conflicts:** an upload only succeeds if the cloud copy is still the one this device last saw. If another device changed it meanwhile, the two copies are merged (nothing from either side is lost) and uploaded. The merge is a union, so something unsaved or unliked on one device can reappear if the other device still has it.
 - **Offline or errors:** the sync icon in the header shows the state (hover for details). Nothing is lost: it retries with increasing delays, and immediately when the browser comes back online.
-- **Code:** `src/sync.js` (the engine, no Firebase in it), `src/cloud.js` (the only file that imports Firebase; loaded on demand), `src/firebaseConfig.js` (your project's public identifiers), `src/useSync.js` (React hook).
+- **Coming back to the tab** checks the cloud copy (at most once a minute), so changes made on another device show up.
+- **Code:** `src/sync.js` (the engine, no Firebase in it), `src/cloud.js` (the only file that imports Firebase; loaded on demand), `src/firebaseConfig.js` (your project's public identifiers), `src/useSync.js` (React hook for syncing and signing in/out), `src/authMessages.js` (plain-language sign-in errors), `src/components/AccountMenu.jsx` (the Sign in button / avatar menu).
+
+### Google sign-in
+
+Everyone starts with an anonymous account. The **Sign in** button in the header opens Google's pop-up:
+
+- **First time:** Google is attached to the account the person already has, so their saves, collections and streak stay exactly where they are.
+- **Google account already used elsewhere** (say, from another device): the app switches to that account and merges this device's data into it. Nothing from either side is lost.
+- **Sign out:** first uploads any unsynced changes. If that fails (offline, say), the person stays signed in and sees a message, so nothing can be lost. Once it succeeds, the data is removed from this device (it stays in the account) and a fresh anonymous account is started.
+- Closing the pop-up is not an error and shows nothing.
 
 ### One-time setup in the Firebase console
 
-1. **Authentication → Sign-in method:** enable **Anonymous**.
+1. **Authentication → Sign-in method:** enable **Anonymous** and **Google**. Under **Settings → Authorized domains**, add the domain the site is served from (for GitHub Pages: `<user>.github.io`). `localhost` is there already for development.
 2. **Firestore Database → Create database:** production mode, in a location close to your users (it can't be changed later).
 3. **Firestore → Rules:** publish this, so each user can only reach their own document:
 
@@ -67,7 +77,8 @@ service cloud.firestore {
 
 ### Limits to know about
 
-- **Anonymous accounts live in one browser.** A second device gets its own, separate account, and clearing the browser's site data forgets the account. To share one profile across devices, people need to sign in with a real account (for example Google). The sync engine already handles switching accounts by merging this device's data into the account's copy; the sign-in button is the missing piece.
+- **Anonymous accounts live in one browser.** Until someone signs in with Google, clearing the browser's site data forgets the account and a second device gets a separate one. Signing in fixes both.
+- **Pop-ups:** sign-in uses a pop-up window. If a browser blocks it, the app says so and asks the person to allow pop-ups for the site.
 - A document is limited to 1 MiB. Saved posts are small records, so thousands fit; `likes` has no cap. If the profile ever grows past about 900 kB, syncing stops with a "too-large" warning, and the data stays safe on the device.
 
 ## Attribution

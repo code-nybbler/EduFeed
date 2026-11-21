@@ -312,6 +312,80 @@ await resetApp({ saved: [{ id: 1301, kind: 'article', title: 'Local only', at: 1
 await until(() => Boolean($('.sync-error')));
 check('a sync problem shows a warning with its code, and the app keeps working', $('.sync-error').getAttribute('title').includes('auth/operation-not-allowed') && $('.sync-error').getAttribute('title').includes('still saved on this device') && Boolean(button('Saved (1)')));
 
+// ---------- 8e. Google sign-in ----------
+check('an adapter without sign-in shows no sign-in button', !$('.signin') && !$('.avatar'));
+const fakeAccounts = () => {
+  const c = fakeCloud();
+  c.n = 0; c.user = null; c.listeners = new Set(); c.mode = 'link'; c.failSave = false; c.signedOut = 0;
+  const google = { uid: 'g1', isAnonymous: false, name: 'Ada Lovelace', email: 'ada@example.com', photo: '' };
+  const set = (u) => { c.user = u; c.listeners.forEach((f) => f(u)); };
+  c.signIn = async () => { if (!c.user) set({ uid: `anon-${++c.n}`, isAnonymous: true, name: '', email: '', photo: '' }); return c.user.uid; };
+  const save = c.save;
+  c.save = async (...a) => { if (c.failSave) throw Object.assign(new Error('offline'), { code: 'unavailable' }); return save(...a); };
+  c.getUser = () => c.user;
+  c.onUser = (cb) => { c.listeners.add(cb); cb(c.user); return () => c.listeners.delete(cb); };
+  c.signInWithGoogle = async () => {
+    if (c.mode === 'cancel') throw Object.assign(new Error('closed'), { code: 'auth/popup-closed-by-user' });
+    if (c.mode === 'blocked') throw Object.assign(new Error('blocked'), { code: 'auth/popup-blocked' });
+    if (c.mode === 'link') set({ ...google, uid: c.user.uid });
+    else set(google); // an account that already exists
+  };
+  c.signOut = async () => { c.signedOut++; set(null); };
+  return c;
+};
+const acc = fakeAccounts();
+await resetApp({ saved: [{ id: 1201, kind: 'article', title: 'Mine', at: 1 }] }, { syncAdapter: acc, syncDebounceMs: 50 });
+await until(() => Boolean($('.signin')));
+check('signed out (anonymous): a "Sign in" button is shown', Boolean($('.signin')) && !$('.avatar'));
+
+acc.mode = 'cancel';
+await click($('.signin')); await flush(100);
+check('closing the Google window is silent: no notice, still signed out', !$('.notice') && Boolean($('.signin')));
+
+acc.mode = 'blocked';
+await click($('.signin')); await until(() => Boolean($('.notice')));
+check('a blocked pop-up explains itself', txt($('.notice')).includes('pop-up'), txt($('.notice')));
+await click(button('Dismiss', $('.notice')));
+check('...and the message can be dismissed', !$('.notice'));
+
+acc.mode = 'link';
+const anonUid = acc.user.uid;
+await click($('.signin')); await until(() => Boolean($('.avatar')));
+check('signing in keeps the same account and the data: avatar shown, button gone', acc.user.uid === anonUid && !$('.signin') && $('.avatar').getAttribute('aria-label').includes('ada@example.com') && Boolean(button('Saved (1)')), $('.avatar')?.getAttribute('aria-label'));
+check('the first letter of the name is the avatar', txt($('.avatar')) === 'A');
+await click($('.avatar'));
+check('the avatar opens a panel with name, email and sign out', txt($('.account-panel')).includes('Ada Lovelace') && txt($('.account-panel')).includes('ada@example.com') && Boolean(button('Sign out', $('.account-panel'))));
+await act(async () => { document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); });
+check('Escape closes the panel', !$('.account-panel'));
+
+// Sign out: refused while the latest changes can't be saved to the account.
+await click(button('Saved (1)')); await click(button('＋ New collection'));
+await typeInto($('.collection-form input'), 'Unsaved work'); await submit($('.collection-form'));
+acc.failSave = true;
+await click($('.avatar')); await click(button('Sign out', $('.account-panel')));
+await until(() => Boolean($('.notice')));
+check('sign-out is refused when the latest changes could not be saved', txt($('.notice')).includes("weren't signed out") && acc.signedOut === 0 && acc.user.uid === anonUid && Object.keys(stored().collections).length === 1, txt($('.notice')));
+await click(button('Dismiss', $('.notice')));
+
+acc.failSave = false;
+await click($('.avatar')); await click(button('Sign out', $('.account-panel')));
+await until(() => acc.signedOut === 1 && Boolean($('.signin')));
+const savedInCloud = JSON.parse(acc.docs.get(anonUid).json);
+check('sign-out first uploads the changes, then clears this device', Object.values(savedInCloud.collections).some((c) => c.name === 'Unsaved work') && savedInCloud.saved.length === 1);
+check('...the device is empty and has a new anonymous account', Boolean(button('Saved (0)')) && acc.user.isAnonymous && acc.user.uid !== anonUid && stored().saved.length === 0, acc.user?.uid);
+check('...and the old account document is left alone', acc.docs.get(anonUid) && JSON.parse(acc.docs.get(anonUid).json).saved.length === 1);
+
+// Signing in to an account that already exists merges this device into it.
+acc.docs.clear(); acc.docs.set('g1', { rev: 2, json: JSON.stringify({ saved: [{ id: 1301, kind: 'article', title: 'From my other device', at: 9 }], collections: {}, likes: {}, weights: {}, seen: [], streak: {}, settings: {} }) });
+const acc2 = fakeAccounts(); acc2.docs = acc.docs; acc2.mode = 'existing';
+await resetApp({ saved: [{ id: 1201, kind: 'article', title: 'Mine', at: 1 }] }, { syncAdapter: acc2, syncDebounceMs: 50 });
+await until(() => Boolean($('.signin')));
+await click($('.signin')); await until(() => Boolean($('.avatar')));
+await until(() => Boolean(button('Saved (2)')));
+check('signing in to an existing account merges this device with it', Boolean(button('Saved (2)')) && acc2.user.uid === 'g1' && stored().saved.map((r) => r.id).sort().join() === '1201,1301', stored().saved.map((r) => r.id).join());
+await until(() => JSON.parse(acc.docs.get('g1').json).saved.length === 2);
+check('...and the merged result is uploaded to that account', JSON.parse(acc.docs.get('g1').json).saved.length === 2);
+
 // ---------- 9. location denied ----------
 await act(async () => { root1.unmount(); });
 window.localStorage.clear(); geoMode = 'deny';
