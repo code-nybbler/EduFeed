@@ -8,6 +8,11 @@ function endMessage(filter, hasCards) {
       ? "That's everything within 10 km of you."
       : "We couldn't find any articles or photos within 10 km of you.";
   }
+  if (filter.type === 'search') {
+    return hasCards
+      ? `That's every result we found for "${filter.query}".`
+      : `No results for "${filter.query}". Try different or fewer words.`;
+  }
   return hasCards
     ? `That's every post we found tagged "${filter.tag}".`
     : `No posts found tagged "${filter.tag}". Tags that name a specific topic work best.`;

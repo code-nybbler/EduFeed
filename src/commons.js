@@ -145,6 +145,13 @@ async function fetchMedia({ video, topic, n }) {
 export const fetchCommonsImages = (n, topic) => fetchMedia({ video: false, topic, n });
 export const fetchCommonsVideos = (n, topic) => fetchMedia({ video: true, topic, n });
 
+/** One page of images or videos matching what the user typed. `next` is the following offset, or null. */
+export async function fetchCommonsSearch({ video, query, n, offset = 0 }) {
+  const filter = video ? 'filetype:video' : 'filetype:bitmap';
+  const { pages, next } = await run(`${query} ${filter}`, Math.min(n, 20), offset);
+  return { cards: byIndex(pages).map((p) => toMediaCard(p)).filter(Boolean), next };
+}
+
 /** One page of images or videos in a Commons category (a card's tag). `next` is the following offset, or null. */
 export async function fetchCommonsCategory({ video, category, n, offset = 0 }) {
   const filter = video ? 'filetype:video' : 'filetype:bitmap';

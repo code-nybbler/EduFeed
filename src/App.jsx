@@ -5,12 +5,14 @@ import AccountMenu from './components/AccountMenu.jsx';
 import CollectionBar from './components/CollectionBar.jsx';
 import Feed from './components/Feed.jsx';
 import SavedStub from './components/SavedStub.jsx';
+import SearchBar from './components/SearchBar.jsx';
+import ShowMore from './components/ShowMore.jsx';
 import StreakBadge from './components/StreakBadge.jsx';
 import SyncStatus from './components/SyncStatus.jsx';
 import { remember } from './cardCache.js';
 import { useSavedCards } from './useSavedCards.js';
 import { useSync } from './useSync.js';
-import { ALL, filterKey, tagFilter } from './filters.js';
+import { ALL, cleanQuery, filterKey, searchFilter, tagFilter } from './filters.js';
 import { loadProfile, persistProfile } from './storage.js';
 import { useGeolocation } from './useGeolocation.js';
 import {
@@ -18,6 +20,7 @@ import {
   collectionRecords,
   createCollection,
   deleteCollection,
+  likedRecords,
   personalRatio,
   recordOpen,
   removeFromCollection,
@@ -28,12 +31,18 @@ import {
   touchStreak,
 } from './profile.js';
 
+const PAGE_SIZE = 20; // saved or liked posts fetched and shown at a time
+
 // `syncAdapter`: leave out for Firebase, `null` to switch syncing off, or an object to use instead (tests).
 export default function App({ syncAdapter, syncDebounceMs } = {}) {
   const [profile, setProfile] = useState(loadProfile);
   const [view, setView] = useState('feed');
   const [filter, setFilter] = useState(ALL);
   const [collectionId, setCollectionId] = useState('all');
+  const [savedLimit, setSavedLimit] = useState(PAGE_SIZE);
+  const [likedLimit, setLikedLimit] = useState(PAGE_SIZE);
+  // Posts unliked during this visit to the Liked tab stay listed (unliked) so a slip can be undone.
+  const [lingering, setLingering] = useState({});
   const geo = useGeolocation();
   const cloud = useSync(profile, setProfile, { adapter: syncAdapter, debounceMs: syncDebounceMs });
   const viewed = useRef(new Set()); // cards already counted toward today's streak this session
@@ -47,13 +56,18 @@ export default function App({ syncAdapter, syncDebounceMs } = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on first load
   }, []);
 
-  const onLike = useCallback((card) => setProfile((p) => toggleLike(p, card)), []);
+  const onLike = useCallback((card) => {
+    remember(card); // we have the full card now, so the Liked tab won't need to fetch it
+    setProfile((p) => toggleLike(p, card));
+  }, []);
   const onSave = useCallback((card) => {
     remember(card); // we have the full card now, so the Saved tab won't need to fetch it
     setProfile((p) => toggleSave(p, card));
   }, []);
   // For saved posts that couldn't be loaded: only the id is known.
   const onUnsave = useCallback((id) => setProfile((p) => toggleSave(p, { id, categories: [] })), []);
+  // For liked posts that couldn't be loaded: only the id is known. Never turns a like ON by accident.
+  const onUnlikeId = useCallback((id) => setProfile((p) => (p.likes[id] ? toggleLike(p, { id, categories: [] }) : p)), []);
   const onOpen = useCallback((card) => setProfile((p) => recordOpen(p, card)), []);
 
   const onView = useCallback((card) => {
@@ -101,6 +115,16 @@ export default function App({ syncAdapter, syncDebounceMs } = {}) {
 
   const onTag = useCallback((tag) => pickFilter(tagFilter(tag)), [pickFilter]);
 
+  // An empty search goes back to For you, but only if a search is what is showing.
+  const onSearch = useCallback(
+    (text) => {
+      const query = cleanQuery(text);
+      if (query) pickFilter(searchFilter(query));
+      else if (filter.type === 'search') pickFilter(ALL);
+    },
+    [pickFilter, filter.type]
+  );
+
   const actions = useMemo(
     () => ({ onLike, onSave, onOpen, onTag, onView, onToggleCollection, onCreateCollection }),
     [onLike, onSave, onOpen, onTag, onView, onToggleCollection, onCreateCollection]
@@ -117,7 +141,39 @@ export default function App({ syncAdapter, syncDebounceMs } = {}) {
         : collectionRecords({ saved: profile.saved, collections: profile.collections }, activeCollection),
     [activeCollection, savedRecords, profile.saved, profile.collections]
   );
-  const { items, retry, anyFailed } = useSavedCards(shownRecords, view === 'saved');
+  // Only the first page is fetched and shown; "Show more" adds the next. Starts over when the tab or collection changes.
+  useEffect(() => setSavedLimit(PAGE_SIZE), [view, activeCollection]);
+  const shownPage = useMemo(() => shownRecords.slice(0, savedLimit), [shownRecords, savedLimit]);
+  const { items, retry, anyFailed } = useSavedCards(shownPage, view === 'saved');
+
+  // ---------- Liked tab ----------
+  useEffect(() => {
+    if (view === 'liked') return;
+    setLikedLimit(PAGE_SIZE);
+    setLingering((l) => (Object.keys(l).length ? {} : l));
+  }, [view]);
+
+  const likedAll = useMemo(() => likedRecords(profile), [profile.likes, profile.saved]);
+  const likedList = useMemo(() => {
+    const present = new Set(likedAll.map((r) => String(r.id)));
+    const extra = Object.values(lingering).filter((r) => !present.has(String(r.id)));
+    // A post that was unliked and liked again keeps its place instead of jumping to the top.
+    const base = likedAll.map((r) => (lingering[String(r.id)] ? { ...r, at: lingering[String(r.id)].at } : r));
+    return extra.length || base.some((r, i) => r !== likedAll[i]) ? [...base, ...extra].sort((a, b) => b.at - a.at) : likedAll;
+  }, [likedAll, lingering]);
+  const likedShown = useMemo(() => likedList.slice(0, likedLimit), [likedList, likedLimit]);
+  const liked = useSavedCards(likedShown, view === 'liked');
+  const likedActions = useMemo(
+    () => ({
+      ...actions,
+      onLike: (card) => {
+        const record = likedList.find((r) => String(r.id) === String(card.id));
+        if (record && profile.likes[card.id]) setLingering((l) => ({ ...l, [String(card.id)]: record }));
+        onLike(card);
+      },
+    }),
+    [actions, likedList, profile.likes, onLike]
+  );
 
   const createFromBar = (name) => {
     const { profile: next, id } = createCollection(profile, name);
@@ -134,14 +190,7 @@ export default function App({ syncAdapter, syncDebounceMs } = {}) {
           <h1 className="brand">EduFeed</h1>
           <StreakBadge streak={profile.streak} />
           <SyncStatus status={cloud.status} />
-          {cloud.canSignIn && cloud.account !== undefined && (
-            <AccountMenu
-              account={cloud.account}
-              busy={cloud.busy}
-              onSignIn={cloud.signIn}
-              onSignOut={cloud.signOut}
-            />
-          )}
+          <SearchBar active={filter.type === 'search' ? filter.query : ''} onSearch={onSearch} />
           <nav className="tabs" aria-label="Views">
             <button
               type="button"
@@ -162,7 +211,26 @@ export default function App({ syncAdapter, syncDebounceMs } = {}) {
             >
               Saved ({savedRecords.length})
             </button>
+            <button
+              type="button"
+              className={`tab${view === 'liked' ? ' active' : ''}`}
+              aria-current={view === 'liked' ? 'page' : undefined}
+              onClick={() => {
+                setView('liked');
+                window.scrollTo({ top: 0 });
+              }}
+            >
+              Liked ({Object.keys(profile.likes).length})
+            </button>
           </nav>
+          {cloud.canSignIn && cloud.account !== undefined && (
+            <AccountMenu
+              account={cloud.account}
+              busy={cloud.busy}
+              onSignIn={cloud.signIn}
+              onSignOut={cloud.signOut}
+            />
+          )}
         </div>
         <CategoryBar filter={filter} onPick={pickFilter} locating={geo.asking} />
       </header>
@@ -200,6 +268,17 @@ export default function App({ syncAdapter, syncDebounceMs } = {}) {
             <div className="banner">
               <span>
                 Posts tagged <strong>{filter.tag}</strong>
+              </span>
+              <button type="button" className="linkish" onClick={() => pickFilter(ALL)}>
+                ✕ Back to For you
+              </button>
+            </div>
+          )}
+
+          {filter.type === 'search' && (
+            <div className="banner">
+              <span>
+                Results for <strong>“{filter.query}”</strong>
               </span>
               <button type="button" className="linkish" onClick={() => pickFilter(ALL)}>
                 ✕ Back to For you
@@ -277,6 +356,40 @@ export default function App({ syncAdapter, syncDebounceMs } = {}) {
                 )
               )}
             </div>
+            <ShowMore left={shownRecords.length - shownPage.length} onClick={() => setSavedLimit((n) => n + PAGE_SIZE)} />
+          </>
+        )}
+
+        {view === 'liked' && (
+          <>
+            {liked.anyFailed && (
+              <div className="notice" role="alert">
+                <span>Some liked posts couldn't be loaded.</span>
+                <button type="button" className="linkish" onClick={liked.retry}>
+                  Try again
+                </button>
+              </div>
+            )}
+            <div className="feed">
+              {likedList.length === 0 && (
+                <p className="status">Nothing liked yet. Tap ♡ Like on anything you enjoy: your feed learns from it.</p>
+              )}
+              {liked.items.map(({ record, card, state }) =>
+                card ? (
+                  <Card
+                    key={record.id}
+                    card={card}
+                    liked={Boolean(profile.likes[record.id])}
+                    saved={savedIds.has(record.id)}
+                    collections={profile.collections}
+                    {...likedActions}
+                  />
+                ) : (
+                  <SavedStub key={record.id} record={record} state={state} mode="liked" onRemove={onUnlikeId} />
+                )
+              )}
+            </div>
+            <ShowMore left={likedList.length - likedShown.length} onClick={() => setLikedLimit((n) => n + PAGE_SIZE)} />
           </>
         )}
       </main>

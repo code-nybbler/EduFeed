@@ -11,7 +11,7 @@ export const MAX_COLLECTIONS = 50;
 export const MAX_NAME = 40;
 
 export const emptyProfile = () => ({
-  likes: {}, // id -> { title, seed, at }
+  likes: {}, // id -> { title, seed, at, kind } (plus `snapshot` for "On this day" cards, like saves)
   saved: [], // saved posts, oldest first: { id, kind, title, at } (plus `snapshot` for "On this day" cards)
   collections: {}, // id -> { id, name, createdAt, cardIds: [] }; cards in them are always also in `saved`
   seen: [], // ids already shown, so the main feed never repeats
@@ -59,6 +59,37 @@ function normalizeSaved(saved) {
   return [];
 }
 
+/** What kind of post an id belongs to. Likes made before the app stored `kind` are worked out from the id's shape. */
+export function kindOfId(id) {
+  const s = String(id);
+  if (s.startsWith('commons:')) return 'media';
+  if (s.startsWith('otd:')) return 'otd';
+  return 'article';
+}
+
+/**
+ * The liked posts as records, newest like first: the same shape as saved records, so the Liked tab
+ * can bring them back by id exactly like the Saved tab does. An old "On this day" like has no
+ * snapshot of its own; if that post was also saved, the saved copy's snapshot is used.
+ */
+export function likedRecords(profile) {
+  const savedById = new Map(profile.saved.map((r) => [String(r.id), r]));
+  return Object.entries(profile.likes)
+    .map(([key, like]) => {
+      const kind = like.kind ?? kindOfId(key);
+      const number = Number(key);
+      const record = {
+        id: kind === 'article' && Number.isFinite(number) ? number : key,
+        kind,
+        title: like.title ?? '',
+        at: like.at ?? 0,
+      };
+      if (kind === 'otd') record.snapshot = like.snapshot ?? savedById.get(key)?.snapshot;
+      return record;
+    })
+    .sort((a, b) => b.at - a.at);
+}
+
 export const isSaved = (profile, id) => profile.saved.some((r) => r.id === id);
 
 export const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -81,10 +112,14 @@ export function toggleLike(profile, card) {
     return { ...profile, likes, weights: bump(profile.weights, card.categories, -2) };
   }
   // `seed` is the topic to search for "more like this"; null when a card has no usable topic.
+  // `kind` (and `snapshot` for "On this day") is what the Liked tab needs to bring the post back by id.
+  const kind = card.kind ?? 'article';
   likes[card.id] = {
     title: card.title,
     seed: card.seedTitle === undefined ? card.title : card.seedTitle,
     at: Date.now(),
+    kind,
+    ...(kind === 'otd' ? { snapshot: card } : {}),
   };
   return { ...profile, likes, weights: bump(profile.weights, card.categories, 2) };
 }

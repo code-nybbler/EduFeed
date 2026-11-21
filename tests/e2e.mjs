@@ -386,6 +386,139 @@ check('signing in to an existing account merges this device with it', Boolean(bu
 await until(() => JSON.parse(acc.docs.get('g1').json).saved.length === 2);
 check('...and the merged result is uploaded to that account', JSON.parse(acc.docs.get('g1').json).saved.length === 2);
 
+// ---------- 8f. search ----------
+const search = async (text) => { io.budget = 8; await typeInto($('.search input'), text); await submit($('.search')); };
+const feedCards = () => $$('main > div > .feed .card');
+await resetApp(null);
+io.budget = 8; log.length = 0;
+await search('  volcano ');
+await until(() => txt($('.status')).includes('every result'));
+check('search: banner shows what was searched', txt($('.banner')).includes('Results for “volcano”') && activeCat().length === 0, txt($('.banner')));
+const sq = log.map((u) => u.searchParams.get('gsrsearch')).filter(Boolean);
+check('search: asks Wikipedia and Commons (images and videos) with the tidied text', sq.includes('volcano') && sq.includes('volcano filetype:bitmap') && sq.includes('volcano filetype:video'), sq.join(' | '));
+const hits = feedCards().map((c) => txt(c.querySelector('.card-title')));
+check('search: every result shown exactly once (15 articles + 4 images + 1 video)', hits.length === 20 && new Set(hits).size === 20, `${hits.length} cards`);
+check('search: best match first (Wikipedia order is kept)', hits[0] === 'Volcano article 0' && hits.filter((t) => t.startsWith('Volcano article')).join() === Array.from({ length: 15 }, (_, i) => `Volcano article ${i}`).join());
+check('search: end-of-results message', txt($('.status')).includes('every result we found for "volcano"'), txt($('.status')));
+check('search: the box keeps the query', $('.search input').value === 'volcano');
+await click(button('Back to For you'));
+check('search: back to For you clears the box and the banner', eq(activeCat(), ['For you']) && $('.search input').value === '' && !$('.banner'));
+
+await search('volcano'); await until(() => Boolean(button('Back to For you')));
+await click(button('History', $('.catbar')));
+check('search: choosing a category leaves the search and clears the box', $('.search input').value === '' && !$('.banner'));
+await search('volcano'); await until(() => Boolean(button('Back to For you')));
+await search('   ');
+check('search: submitting an empty box returns to For you', eq(activeCat(), ['For you']) && !$('.banner'));
+await search('   ');
+check('search: an empty box on For you does nothing', eq(activeCat(), ['For you']));
+
+await search('zzzz nothing');
+await until(() => txt($('.status')).includes('No results'));
+check('search: no matches gives a clear message', txt($('.status')).includes('No results for "zzzz nothing"') && feedCards().length === 0, txt($('.status')));
+
+mocks.state.fail = true;
+await search('volcano');
+await until(() => Boolean($('.status.error')));
+check('search: a network failure shows an error with a retry, not a blank page', Boolean($('.status.error')) && Boolean(button('Try again', $('.status.error'))));
+mocks.state.fail = false;
+await click(button('Try again', $('.status.error')));
+await until(() => feedCards().length > 0);
+check('search: retry works', feedCards().length > 0);
+
+await click(button('Saved ('));
+await search('volcano');
+check('search from the Saved tab switches to the feed', $('.tab.active') && txt($('.tab.active')).startsWith('Feed'), txt($('.tab.active')));
+check('the search box sits in the header', Boolean($('.header .search')));
+
+// ---------- 8g. Liked tab ----------
+const moonLike = { title: '1969', seed: null, at: 3, kind: 'otd', snapshot: moon };
+const likedProfile = { likes: {
+  5201: { title: 'Liked article', seed: 'A', at: 50, kind: 'article' },
+  'commons:5102': { title: 'Liked picture', seed: null, at: 40, kind: 'media' },
+  [moon.id]: moonLike,
+  9000019: { title: 'Deleted page', seed: 'D', at: 2 }, // made before likes stored `kind`
+  5301: { title: 'Old like', at: 1 },
+} };
+await resetApp(likedProfile);
+check('the tab shows how many posts are liked', Boolean(button('Liked (5)')));
+check('nothing is fetched until the Liked tab is opened', !log.some((u) => u.searchParams.get('pageids')));
+await click(button('Liked (5)'));
+await until(() => $$('main > .feed .card').length === 5 && !txt($('main > .feed')).includes('Loading…'));
+const likedReqs = log.filter((u) => u.searchParams.get('pageids'));
+const lwp = likedReqs.filter((u) => u.host === 'en.wikipedia.org'); const lcm = likedReqs.filter((u) => u.host === 'commons.wikimedia.org');
+check('liked posts are fetched by id in one batch per site', lwp.length === 1 && lwp[0].searchParams.get('pageids').split('|').sort().join() === '5201,5301,9000019' && lcm.length === 1 && lcm[0].searchParams.get('pageids') === '5102', likedReqs.map((u) => u.searchParams.get('pageids')).join(' / '));
+const likedText = txt($('main > .feed'));
+check('articles, pictures and "On this day" likes all come back', likedText.includes('Place 4201') && likedText.includes('Local photo 5102') && likedText.includes('Humans land on the Moon.') && likedText.includes('Place 4301'));
+check('a deleted page shows a placeholder that is still liked', $$('.card-stub').length === 1 && txt($('.card-stub')).includes('Deleted page') && txt($('.card-stub')).includes('no longer available') && Boolean(button('♥ Liked', $('.card-stub'))));
+const order = $$('main > .feed .card').map((c) => txt(c.querySelector('.card-title')));
+check('newest like first', order[0] === 'Place 4201' && order[1].startsWith('Local photo 5102') && order[order.length - 1] === 'Place 4301', order.join(' / '));
+check('every card in Liked shows as liked', $$('main > .feed .card:not(.card-stub)').every((c) => button('♥ Liked', c)?.getAttribute('aria-pressed') === 'true'));
+
+const firstLiked = $('main > .feed .card');
+await click(button('♥ Liked', firstLiked));
+check('unliking works from the Liked tab: stored, counted, button flips', !stored().likes[5201] && Boolean(button('Liked (4)')) && Boolean(button('♡ Like', firstLiked)), JSON.stringify(Object.keys(stored().likes)));
+check('...and the card stays put so a slip can be undone', $$('main > .feed .card').length === 5 && txt($('main > .feed .card .card-title')) === 'Place 4201');
+await click(button('♡ Like', $('main > .feed .card')));
+check('liking it again restores it in the same place', Boolean(stored().likes[5201]) && Boolean(button('Liked (5)')) && txt($('main > .feed .card .card-title')) === 'Place 4201');
+await click(button('♥ Liked', $('main > .feed .card')));
+await click(button('Feed')); await click(button('Liked (4)'));
+await until(() => $$('main > .feed .card').length === 4);
+check('after leaving the tab, an unliked post is gone from the list', $$('main > .feed .card').length === 4 && !txt($('main > .feed')).includes('Place 4201'));
+
+await click(button('♥ Liked', $('.card-stub')));
+check('an unavailable post can be unliked too, and never gets liked by accident', !stored().likes[9000019] && $$('.card-stub').length === 0 && Boolean(button('Liked (3)')), JSON.stringify(Object.keys(stored().likes)));
+
+// A lot of likes: shown and fetched 20 at a time.
+const many = {}; for (let i = 0; i < 25; i++) many[1500 + i] = { title: `Many ${i}`, seed: null, at: 100 - i, kind: 'article' };
+await resetApp({ likes: many });
+await click(button('Liked (25)'));
+await until(() => $$('main > .feed .card').length === 20 && !txt($('main > .feed')).includes('Loading…'));
+const firstFetch = log.filter((u) => u.searchParams.get('pageids') && u.host === 'en.wikipedia.org');
+check('25 likes: only the first 20 are fetched and shown, with a "Show more" button', firstFetch.length === 1 && firstFetch[0].searchParams.get('pageids').split('|').length === 20 && Boolean(button('Show more (5 left)')), String(firstFetch.length));
+await click(button('Show more'));
+await until(() => $$('main > .feed .card').length === 25 && !txt($('main > .feed')).includes('Loading…'));
+check('...then the rest', $$('main > .feed .card').length === 25 && !button('Show more'));
+
+// A post liked from the feed is already in hand: the Liked tab doesn't fetch it again.
+await act(async () => { root1.unmount(); });
+window.localStorage.clear(); io.budget = 2; log.length = 0;
+root1 = createRoot(document.getElementById('root'));
+await act(async () => { root1.render(React.createElement(App, { syncAdapter: null })); });
+await until(() => $$('.card-article').length > 0);
+const fromFeed = $('.card-article'); const fromFeedTitle = txt(fromFeed.querySelector('.card-title'));
+await click(button('Like', fromFeed));
+log.length = 0;
+await click(button('Liked (1)'));
+check('a post liked in the feed shows in Liked without being fetched again', !log.some((u) => u.searchParams.get('pageids')) && $$('main > .feed .card').length === 1 && txt($('main > .feed .card-title')) === fromFeedTitle, fromFeedTitle);
+check('...and its kind is stored with the like', Object.values(stored().likes)[0].kind === 'article');
+await click(button('♥ Liked', $('main > .feed .card')));
+check('unliking the only post leaves a placeholder-free empty list after leaving', stored().likes && Object.keys(stored().likes).length === 0);
+await click(button('Feed')); await click(button('Liked (0)'));
+check('empty Liked tab explains itself', txt($('main > .feed .status')).includes('Nothing liked yet'), txt($('main')));
+
+// ---------- 8h. Saved tab is paged too ----------
+const bigSaved = Array.from({ length: 25 }, (_, i) => ({ id: 6000 + i, kind: 'article', title: `Big ${i}`, at: 1000 + i }));
+await resetApp({ saved: bigSaved, collections: { big: { id: 'big', name: 'Big', createdAt: 1, cardIds: bigSaved.map((r) => r.id) } } });
+await click(button('Saved (25)'));
+await until(() => $$('main > .feed .card').length === 20 && !txt($('main > .feed')).includes('Loading…'));
+const savedFetch = log.filter((u) => u.searchParams.get('pageids') && u.host === 'en.wikipedia.org');
+check('25 saved: only the first 20 are fetched and shown, newest first, with "Show more"', savedFetch.length === 1 && savedFetch[0].searchParams.get('pageids').split('|').length === 20 && txt($('main > .feed .card-title')) === 'Place 5024' && Boolean(button('Show more (5 left)')), String(savedFetch.length));
+check('the saved count in the tab still counts everything', Boolean(button('Saved (25)')) && txt($('.pill.active')).includes('(25)'));
+await click(button('Show more'));
+await until(() => $$('main > .feed .card').length === 25 && !txt($('main > .feed')).includes('Loading…'));
+check('Show more adds the rest (fetching only those 5) and the button goes away', $$('main > .feed .card').length === 25 && !button('Show more') && log.filter((u) => u.searchParams.get('pageids') && u.host === 'en.wikipedia.org').length === 2);
+await click(button('Big (25)'));
+await until(() => $$('main > .feed .card').length === 20);
+check('switching collection starts again from the first page', $$('main > .feed .card').length === 20 && Boolean(button('Show more (5 left)')), String($$('main > .feed .card').length));
+await click(button('Show more')); await until(() => $$('main > .feed .card').length === 25);
+await click(button('Feed')); await click(button('Saved (25)'));
+await until(() => $$('main > .feed .card').length === 20);
+check('leaving and coming back to Saved starts again from the first page', $$('main > .feed .card').length === 20);
+await click(button('★ Saved', $('main > .feed .card')));
+await until(() => $$('main > .feed .card').length === 20 && !txt($('main > .feed')).includes('Loading…'));
+check('unsaving one pulls the next saved post into the page', $$('main > .feed .card').length === 20 && Boolean(button('Show more (4 left)')), String($$('main > .feed .card').length));
+
 // ---------- 9. location denied ----------
 await act(async () => { root1.unmount(); });
 window.localStorage.clear(); geoMode = 'deny';

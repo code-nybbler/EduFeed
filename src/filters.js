@@ -3,11 +3,17 @@
 //   { type: 'category', id }      a broad topic from the nav bar
 //   { type: 'tag', tag }          posts carrying one tag (a Wikipedia or Commons category)
 //   { type: 'nearby' }            places around the user
+//   { type: 'search', query }     what the user typed in the search bar
 
 export const ALL = { type: 'all' };
 export const NEARBY = { type: 'nearby' };
 export const categoryFilter = (id) => ({ type: 'category', id });
 export const tagFilter = (tag) => ({ type: 'tag', tag });
+
+export const MAX_QUERY = 100;
+/** Tidies what was typed in the search box: single spaces, no edges, a sane length. */
+export const cleanQuery = (text) => String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_QUERY);
+export const searchFilter = (query) => ({ type: 'search', query: cleanQuery(query) });
 
 // `topics` are Wikipedia "articletopic" values (labels Wikipedia assigns to articles automatically).
 // One is picked at random per request, so a category stays varied. Between them the categories
@@ -95,6 +101,8 @@ export function filterKey(filter) {
       return `category:${filter.id}`;
     case 'tag':
       return `tag:${filter.tag}`;
+    case 'search':
+      return `search:${filter.query.toLowerCase()}`;
     case 'nearby':
       return 'nearby';
     default:
@@ -102,8 +110,8 @@ export function filterKey(filter) {
   }
 }
 
-/** Tag and nearby feeds page through a fixed result list instead of sampling at random. */
-export const isSequential = (filter) => filter.type === 'tag' || filter.type === 'nearby';
+/** Tag, search and nearby feeds page through a fixed result list instead of sampling at random. */
+export const isSequential = (filter) => filter.type === 'tag' || filter.type === 'search' || filter.type === 'nearby';
 
 export function filterLabel(filter) {
   switch (filter.type) {
@@ -111,6 +119,8 @@ export function filterLabel(filter) {
       return categoryById(filter.id)?.label ?? 'Topic';
     case 'tag':
       return filter.tag;
+    case 'search':
+      return `“${filter.query}”`;
     case 'nearby':
       return 'Near you';
     default:

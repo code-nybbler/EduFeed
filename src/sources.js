@@ -4,15 +4,25 @@
 //             + a Commons image and video (+ a nearby place, if the user opted in)
 //   category  articles on one topic + Commons media for that topic
 //   tag       everything carrying one tag, paged from the start (sequential)
+//   search    Wikipedia articles and Commons media matching what was typed, best match first (sequential)
 //   nearby    places and photos around the user, nearest first (sequential)
 // Every source is independent: one failing never blocks the others.
 
-import { fetchCategoryPage, fetchNearby, fetchNearbyPicked, fetchRandom, fetchRelated, fetchTopic } from './wiki.js';
+import {
+  fetchCategoryPage,
+  fetchNearby,
+  fetchNearbyPicked,
+  fetchRandom,
+  fetchRelated,
+  fetchTopic,
+  searchPage,
+} from './wiki.js';
 import { fetchOnThisDay } from './onThisDay.js';
 import {
   fetchCommonsCategory,
   fetchCommonsImages,
   fetchCommonsNearby,
+  fetchCommonsSearch,
   fetchCommonsVideos,
 } from './commons.js';
 import { BATCH, MEDIA_SLOTS, NEARBY_SLOTS, OTD_SLOTS, emptyParts } from './batch.js';
@@ -26,7 +36,7 @@ const EXTRA = 8;
 
 /** Sequential feeds keep a cursor per source: a number (next offset) or null (exhausted). */
 export function initialCursor(filter) {
-  if (filter.type === 'tag') return { articles: 0, images: 0, videos: 0 };
+  if (filter.type === 'tag' || filter.type === 'search') return { articles: 0, images: 0, videos: 0 };
   if (filter.type === 'nearby') return { articles: 0, media: 0 };
   return {};
 }
@@ -98,6 +108,17 @@ async function byTag(filter, { cursor }) {
   return { parts: { random, images, videos }, errors };
 }
 
+async function bySearch(filter, { cursor }) {
+  const { errors, safe } = collector();
+  const query = filter.query;
+  const [random, images, videos] = await Promise.all([
+    safe(pageOf(cursor, 'articles', (offset) => searchPage(query, 12, offset))),
+    safe(pageOf(cursor, 'images', (offset) => fetchCommonsSearch({ video: false, query, n: 6, offset }))),
+    safe(pageOf(cursor, 'videos', (offset) => fetchCommonsSearch({ video: true, query, n: 4, offset }))),
+  ]);
+  return { parts: { random, images, videos }, errors };
+}
+
 async function nearby({ cursor, coords }) {
   if (!coords) throw new Error('Your location is not available yet.');
   const { errors, safe } = collector();
@@ -125,8 +146,10 @@ export async function fetchParts(filter, ctx) {
       ? await byCategory(filter, ctx)
       : filter.type === 'tag'
         ? await byTag(filter, ctx)
-        : filter.type === 'nearby'
-          ? await nearby(ctx)
-          : await forYou(ctx);
+        : filter.type === 'search'
+          ? await bySearch(filter, ctx)
+          : filter.type === 'nearby'
+            ? await nearby(ctx)
+            : await forYou(ctx);
   return { parts: { ...emptyParts(), ...result.parts }, errors: result.errors };
 }

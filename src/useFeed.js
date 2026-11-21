@@ -10,7 +10,7 @@ const MAX_ATTEMPTS = 3;
  * Infinite feed for one filter. The component using this is keyed by the
  * filter, so changing the filter starts a fresh feed.
  *
- * "For you" and category feeds sample at random and never repeat. Tag and
+ * "For you" and category feeds sample at random and never repeat. Tag, search and
  * nearby feeds walk through a fixed list: they keep a cursor per source plus a
  * buffer of fetched-but-not-yet-shown cards, and report `done` once all of it
  * has been shown.
@@ -59,7 +59,7 @@ export function useFeed(profile, setProfile, filter, coords) {
         const parts = sequential && buffer.current ? mergeParts(buffer.current, fetched) : fetched;
         if (isEmptyParts(parts) && errors.length > 0) throw errors[0];
 
-        page = buildBatch(parts, p, exclude, { keepOrder: filter.type === 'nearby' });
+        page = buildBatch(parts, p, exclude, { keepOrder: filter.type === 'nearby' || filter.type === 'search' });
 
         if (sequential) {
           buffer.current = leftovers(parts, page, exclude);

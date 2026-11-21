@@ -19,6 +19,10 @@ export const cmPage = (id, title, { video = false, index } = {}) => ({
 const TAGGED = Array.from({ length: 14 }, (_, i) => wpPage(100 + i, `Rome article ${i}`));
 const TAG_IMGS = Array.from({ length: 7 }, (_, i) => cmPage(300 + i, `Rome image ${i}.jpg`));
 const TAG_VIDS = Array.from({ length: 2 }, (_, i) => cmPage(400 + i, `Rome video ${i}.webm`, { video: true }));
+// A search for "volcano" matches 15 articles, 4 Commons images and 1 video; "zzzz nothing" matches nothing.
+const VOLCANO = Array.from({ length: 15 }, (_, i) => wpPage(500 + i, `Volcano article ${i}`, { cats: ['Volcanoes'] }));
+const VOLCANO_IMGS = Array.from({ length: 4 }, (_, i) => cmPage(800 + i, `Volcano image ${i}.jpg`));
+const VOLCANO_VIDS = [cmPage(850, 'Volcano video 0.webm', { video: true })];
 const NEAR_N = 25, NEAR_FILES = 15;
 
 const slicePage = (list, offset, limit) => {
@@ -50,6 +54,8 @@ export function install() {
       if (s.startsWith('incategory:"Ancient Rome"')) {
         return json(slicePage(s.includes('filetype:video') ? TAG_VIDS : TAG_IMGS, off, lim));
       }
+      if (s.startsWith('volcano ')) return json(slicePage(s.includes('filetype:video') ? VOLCANO_VIDS : VOLCANO_IMGS, off, lim));
+      if (s.startsWith('zzzz nothing ')) return json({ batchcomplete: true });
       const generic = [cmPage(600 + off, `Generic image ${off}.jpg`), cmPage(700 + off, `Generic video ${off}.webm`, { video: true })];
       return json({ query: { pages: generic.map((p, i) => ({ ...p, index: i + 1 })) } });
     }
@@ -69,6 +75,8 @@ export function install() {
       const s = q.get('gsrsearch'); const off = Number(q.get('gsroffset') ?? 0); const lim = Number(q.get('gsrlimit'));
       if (s === 'incategory:"Ancient Rome"') return json(slicePage(TAGGED, off, lim));
       if (s.startsWith('incategory:')) return json({ batchcomplete: true });
+      if (s === 'volcano') return json(slicePage(VOLCANO, off, lim));
+      if (s === 'zzzz nothing') return json({ batchcomplete: true });
       if (s.startsWith('articletopic:')) {
         return json({ query: { pages: Array.from({ length: 6 }, (_, i) => wpPage(3000 + off + i, `${s.slice(13)} topic ${off}-${i}`, { cats: [s.slice(13)] })) } });
       }

@@ -272,5 +272,36 @@ const down = await sources.fetchParts(filters.categoryFilter('space'), { profile
 check('all sources down -> empty parts + errors reported, no throw', batch.isEmptyParts(down.parts) && down.errors.length >= 3);
 mocks.state.fail = false;
 
+// ---------- search + liked records ----------
+check('cleanQuery collapses spaces, trims and caps the length', filters.cleanQuery('  black   holes \n') === 'black holes' && filters.cleanQuery('x'.repeat(500)).length === filters.MAX_QUERY && filters.cleanQuery(null) === '');
+check('search filters: key ignores case, label quotes the query, feed is sequential', filters.filterKey(filters.searchFilter('Volcano')) === filters.filterKey(filters.searchFilter(' volcano ')) && filters.filterKey(filters.searchFilter('a')) !== filters.filterKey(filters.tagFilter('a')) && filters.filterLabel(filters.searchFilter('volcano')) === '“volcano”' && filters.isSequential(filters.searchFilter('x')));
+check('a search starts with a cursor per source', eq(sources.initialCursor(filters.searchFilter('x')), { articles: 0, images: 0, videos: 0 }));
+{
+  const cursor = sources.initialCursor(filters.searchFilter('volcano'));
+  const { parts, errors } = await sources.fetchParts(filters.searchFilter('volcano'), { profile: prof.emptyProfile(), exclude: new Set(), cursor, coords: null });
+  check('fetchParts(search): Wikipedia articles plus Commons images and videos, no errors', parts.random.length === 12 && parts.images.length === 4 && parts.videos.length === 1 && errors.length === 0, `${parts.random.length}/${parts.images.length}/${parts.videos.length}`);
+  check('...and the cursors advance, or end when a source has nothing more', cursor.articles === 12 && cursor.images === null && cursor.videos === null, JSON.stringify(cursor));
+}
+check('kindOfId reads the shape of an id', prof.kindOfId(123) === 'article' && prof.kindOfId('123') === 'article' && prof.kindOfId('commons:5') === 'media' && prof.kindOfId('otd:event:1:x') === 'otd');
+{
+  const otdCard = { id: 'otd:event:1969:abc', kind: 'otd', title: '1969', extract: 'Moon', categories: [] };
+  const mediaCard = { id: 'commons:77', kind: 'media', title: 'Pic', extract: 'x', categories: [] };
+  let p = prof.toggleLike(prof.toggleLike(prof.toggleLike(prof.emptyProfile(), { id: 5, title: 'Art', extract: 'x', categories: [] }), mediaCard), otdCard);
+  check('a like remembers its kind, and "On this day" likes keep a snapshot', p.likes[5].kind === 'article' && p.likes['commons:77'].kind === 'media' && p.likes[otdCard.id].snapshot?.extract === 'Moon' && !('snapshot' in p.likes[5]));
+  const recs = prof.likedRecords(p);
+  check('likedRecords: record shape like saves, article ids are numbers', recs.length === 3 && recs.find((r) => r.kind === 'article').id === 5 && recs.find((r) => r.kind === 'media').id === 'commons:77' && recs.find((r) => r.kind === 'otd').snapshot.extract === 'Moon');
+}
+{
+  const old = { ...prof.emptyProfile(),
+    likes: { 7: { title: 'Old like', at: 10 }, 'commons:9': { title: 'Old pic', at: 30 }, 'otd:event:1900:z': { title: '1900', at: 20 }, 'otd:event:1800:y': { title: '1800', at: 5 } },
+    saved: [{ id: 'otd:event:1900:z', kind: 'otd', title: '1900', at: 1, snapshot: { id: 'otd:event:1900:z', kind: 'otd', extract: 'From the saved copy' } }] };
+  const recs = prof.likedRecords(old);
+  check('likes made before `kind` existed are still understood, newest first', eq(recs.map((r) => r.id), ['commons:9', 'otd:event:1900:z', 7, 'otd:event:1800:y']) && recs[0].kind === 'media' && recs[2].kind === 'article', JSON.stringify(recs.map((r) => r.id)));
+  check('an old "On this day" like borrows the snapshot of the saved copy, if there is one', recs[1].snapshot?.extract === 'From the saved copy' && recs[3].snapshot === undefined);
+  check('unliking removes it from likedRecords', prof.likedRecords(prof.toggleLike(old, { id: 7, categories: [] })).length === 3);
+  const m = prof.mergeProfiles({ ...prof.emptyProfile(), likes: { 7: { title: 'Old like', at: 10 } } }, { ...prof.emptyProfile(), likes: { 7: { title: 'Old like', at: 50, kind: 'article' } } });
+  check('merging likes keeps the newer entry (with its kind)', m.likes[7].at === 50 && m.likes[7].kind === 'article');
+}
+
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nall checks passed');
 process.exit(failed ? 1 : 0);
